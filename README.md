@@ -1,23 +1,17 @@
-# CD-952 實體機電子書閱讀器 (Project Muteki)
+# CD-952 現代化全功能電子書閱讀器 v4 (真視覺 PDF / EPUB / TXT / BMP)
 
-本專案已依據 WoodyBoy 的 Project Muteki API 完成實機對接 (`platform_muteki.c`)，支援：
-- **系統原生開檔視窗** (`_GetOpenFileName`)：程式與書籍隨便放 `Download` 或任何資料夾都能開啟。
-- **系統原生中文字型** (`MONOSPACE_CJK` + `WriteAlignString`)：免外掛字庫檔，直接顯示繁體中文。
-- **純 C 24-bit BMP 圖片顯示**：支援瀏覽 PDF 轉出的 `.bmp` 圖片書。
-- **自動書籤**：翻頁自動建立 `.bmk` 記住進度。
+專為無敵 CD-952 (240 MHz ARM9 / Besta RTOS / Project Muteki) 打造的現代風格電子書 App。
 
-## 如何編譯出 CD-952 實體機專用 `cd952-reader.exe`
-需要安裝 Project Muteki 工具鏈 (`arm-none-bestaeabi`、`mutekix`、`romtool`、`elf2bestape`)，通常在 Linux / WSL 下透過 Project Muteki 官方 Flatpak SDK 執行：
-
-```bash
-meson setup build --cross-file arm-none-bestaeabi-arm9.ini
-meson compile -C build
-```
-
-編譯完成後，`build/cd952-reader.exe` 就是可以直接丟進無敵 CD-952 `Download` 資料夾執行的實體機程式！
-
-## 實體機操作按鍵
-- `O`：開啟檔案選擇器 (`.txt` / `.bmp`)
-- `方向鍵` / `PageUp` / `PageDown` / `空白鍵`：翻頁
-- `T`：切換日間護眼 / 夜間深色模式
-- `ESC`：退出程式
+## 核心功能一覽
+1. **真正的視覺化 PDF 閱讀引擎 (`pdf_engine.c` + `jpeg_tiny.c`)**：
+   - 不把 PDF 變成純文字！直接依 PDF 頁面 `MediaBox` 渲染實體紙張、陰影、向量框線、內嵌 **JPEG (`/DCTDecode`)** 與 **Flate (`/FlateDecode`)** 圖片，以及依真實座標定位的中英文文字（支援 `/ToUnicode` CMap）。
+   - 支援 **5 段縮放 (`+` / `-`：適應整頁 / 適應寬度 / 135% / 175% / 225%)**、方向鍵平滑平移、`PgUp/PgDn` 換頁、夜間反白模式 (`T`)，以及可選的 **單頁重排放大檢視 (`R`)**。
+   - 延遲單頁解析 + 4 張圖片 LRU 快取：開啟大檔不卡，縮放平移 0 延遲。
+2. **原生 EPUB / TXT / BMP 支援**：
+   - 內建純 C RFC 1951 DEFLATE 解壓器，直接解析 EPUB 書名、作者、Spine 章節與 XHTML 目錄。
+   - 自動辨識 TXT 的 UTF-8 / UTF-16LE / UTF-16BE 編碼；支援編號 BMP 圖片書左右鍵自動翻頁。
+3. **現代 App 介面與進階工具**：
+   - 左側導覽列 (`[1]書架` / `[2]管理` / `[3]外觀` / `[4]匯入`)、繼續閱讀主卡片、4 欄立體書封網格與 4 套現代主題色票（象牙晨光、護眼森綠、柔和暖茶、暗夜極黑）。
+   - **多組手動書籤 (`K`)**：每本書可存最多 16 筆自訂書籤（EPUB / PDF / TXT 全支援）。
+   - **全文關鍵字搜尋 (`F`)**：直接用辭典鍵盤輸入關鍵字或選常用詞，跨全書或全 PDF 頁面檢索並一鍵跳轉。
+   - **章節目錄 (`C`)**、**視覺跳頁滑桿 (`G`)**、**閱讀控制面板 (`ESC` / `M`)**。
