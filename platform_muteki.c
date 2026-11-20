@@ -1,5 +1,6 @@
 /*
- * 無敵 CD-952 (Besta RTOS / Project Muteki) 實機平台實作
+ * 無敵 CD-952 (Besta RTOS / Project Muteki) 實機平台實作 v2
+ * 新增：書架首頁、章節目錄、快速跳頁、4 種護眼配色、3 種行距切換
  */
 
 #include <stdbool.h>
@@ -75,7 +76,7 @@
 
 static lcd_t *g_lcd = NULL;
 static int g_running = 1;
-static uint32_t g_cur_bg = 0xF7F4EC;
+static uint32_t g_text_bg = 0xF7F4EC;
 
 /* 將 UTF-8 轉成 UTF-16 (供 Besta RTOS WriteAlignString 使用) */
 static size_t utf8_to_utf16(const char *src, int src_len, UTF16 *dst, size_t max_dst) {
@@ -130,8 +131,12 @@ static void put_pixel_fb(int x, int y, uint32_t rgb) {
 int hal_get_width(void)  { return g_lcd ? (int)g_lcd->width  : 800; }
 int hal_get_height(void) { return g_lcd ? (int)g_lcd->height : 480; }
 
+void hal_set_text_bg(uint32_t rgb) {
+    g_text_bg = rgb;
+}
+
 void hal_clear(uint32_t rgb) {
-    g_cur_bg = rgb;
+    g_text_bg = rgb;
     rgbSetBkColor(rgb);
     ClearScreen(false);
     hal_fill_rect(0, 0, hal_get_width(), hal_get_height(), rgb);
@@ -153,7 +158,7 @@ void hal_draw_line_utf8(int x, int y, const char *utf8_text, int byte_len, int f
     utf8_to_utf16(utf8_text, byte_len, u16buf, 512);
 
     rgbSetColor(rgb);
-    rgbSetBkColor(g_cur_bg);
+    rgbSetBkColor(g_text_bg);
     SetFontType(MONOSPACE_CJK);
     WriteAlignString(
         x, y,
@@ -224,6 +229,10 @@ int hal_draw_bmp_file(const char *filepath, int x, int y, int w, int h) {
     return 1;
 }
 
+const char *hal_get_library_path(void) {
+    return "C:\\cd952_books.idx";
+}
+
 int hal_open_file_dialog(char *out_path, int max_len) {
     UTF16 utf16path[FILEPICKER_CONTEXT_OUTPUT_MAX_LFN] = {0};
     filepicker_context_t ctx = {0};
@@ -269,10 +278,8 @@ int main(void) {
         return 1;
     }
 
+    /* 啟動直接進入書架畫面，不再強制跳出選檔視窗 */
     reader_init();
-
-    /* 啟動時直接跳出系統檔案選擇器，選完即開始閱讀 */
-    reader_on_key(KEY_OPEN);
     reader_render();
 
     ui_event_t uievent = {0};
@@ -281,16 +288,34 @@ int main(void) {
             if (uievent.event_type == UI_EVENT_TYPE_KEY) {
                 KeyCode k = KEY_NONE;
                 switch (uievent.key_code0) {
-                    case 1:   k = KEY_QUIT; break;   /* KEY_ESC */
-                    case 2:   k = KEY_PREV; break;   /* KEY_LEFT */
-                    case 3:   k = KEY_PREV; break;   /* KEY_UP */
-                    case 6:   k = KEY_PREV; break;   /* KEY_PGUP */
-                    case 4:   k = KEY_NEXT; break;   /* KEY_RIGHT */
-                    case 5:   k = KEY_NEXT; break;   /* KEY_DOWN */
-                    case 7:   k = KEY_NEXT; break;   /* KEY_PGDN */
-                    case 32:  k = KEY_NEXT; break;   /* SPACE */
-                    case 79:  k = KEY_OPEN; break;   /* KEY_O */
-                    case 84:  k = KEY_THEME; break;  /* KEY_T */
+                    case 1:   k = KEY_BACK; break;    /* KEY_ESC */
+                    case 2:   k = KEY_LEFT; break;    /* KEY_LEFT */
+                    case 3:   k = KEY_UP; break;      /* KEY_UP */
+                    case 4:   k = KEY_RIGHT; break;   /* KEY_RIGHT */
+                    case 5:   k = KEY_DOWN; break;    /* KEY_DOWN */
+                    case 6:   k = KEY_PGUP; break;    /* KEY_PGUP */
+                    case 7:   k = KEY_PGDN; break;    /* KEY_PGDN */
+                    case 8:   k = KEY_SHELF; break;   /* Backspace */
+                    case 10:
+                    case 13:  k = KEY_OK; break;      /* Enter */
+                    case 32:  k = KEY_SPACE; break;   /* Space */
+                    case 66:
+                    case 98:  k = KEY_SHELF; break;   /* B */
+                    case 67:
+                    case 99:  k = KEY_TOC; break;     /* C */
+                    case 68:
+                    case 100: k = KEY_DELETE; break;  /* D */
+                    case 71:
+                    case 103: k = KEY_JUMP; break;    /* G */
+                    case 76:
+                    case 108: k = KEY_SPACING; break; /* L */
+                    case 79:
+                    case 111: k = KEY_OPEN; break;    /* O */
+                    case 84:
+                    case 116: k = KEY_THEME; break;   /* T */
+                    case 43:
+                    case 61:  k = KEY_FONT_UP; break; /* + */
+                    case 45:  k = KEY_FONT_DOWN; break; /* - */
                     default:  break;
                 }
                 if (k != KEY_NONE) {
