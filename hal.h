@@ -5,26 +5,26 @@
 #include <stddef.h>
 
 typedef enum {
-    KEY_NONE = 0,
-    KEY_UP,
-    KEY_DOWN,
-    KEY_LEFT,
-    KEY_RIGHT,
-    KEY_PGUP,
-    KEY_PGDN,
-    KEY_OK,       /* Enter */
-    KEY_SPACE,    /* Space */
-    KEY_BACK,     /* ESC */
-    KEY_SHELF,    /* B / Backspace */
-    KEY_OPEN,     /* O */
-    KEY_TOC,      /* C */
-    KEY_JUMP,     /* G */
-    KEY_THEME,    /* T */
-    KEY_SPACING,  /* L */
-    KEY_DELETE,   /* D */
-    KEY_FONT_UP,  /* + */
-    KEY_FONT_DOWN /* - */
-} KeyCode;
+    RKEY_NONE = 0,
+    RKEY_UP,
+    RKEY_DOWN,
+    RKEY_LEFT,
+    RKEY_RIGHT,
+    RKEY_PGUP,
+    RKEY_PGDN,
+    RKEY_OK,       /* Enter */
+    RKEY_SPACE,    /* Space */
+    RKEY_BACK,     /* ESC */
+    RKEY_SHELF,    /* B / Backspace */
+    RKEY_OPEN,     /* O */
+    RKEY_TOC,      /* C */
+    RKEY_JUMP,     /* G */
+    RKEY_THEME,    /* T */
+    RKEY_SPACING,  /* L */
+    RKEY_DELETE,   /* D */
+    RKEY_FONT_UP,  /* + */
+    RKEY_FONT_DOWN /* - */
+} ReaderKey;
 
 /* 螢幕尺寸 */
 int hal_get_width(void);

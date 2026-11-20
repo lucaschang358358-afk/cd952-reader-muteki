@@ -286,39 +286,39 @@ int main(void) {
     while (g_running) {
         if (TestKeyEvent(&uievent) && GetEvent(&uievent)) {
             if (uievent.event_type == UI_EVENT_TYPE_KEY) {
-                KeyCode k = KEY_NONE;
+                ReaderKey k = RKEY_NONE;
                 switch (uievent.key_code0) {
-                    case 1:   k = KEY_BACK; break;    /* KEY_ESC */
-                    case 2:   k = KEY_LEFT; break;    /* KEY_LEFT */
-                    case 3:   k = KEY_UP; break;      /* KEY_UP */
-                    case 4:   k = KEY_RIGHT; break;   /* KEY_RIGHT */
-                    case 5:   k = KEY_DOWN; break;    /* KEY_DOWN */
-                    case 6:   k = KEY_PGUP; break;    /* KEY_PGUP */
-                    case 7:   k = KEY_PGDN; break;    /* KEY_PGDN */
-                    case 8:   k = KEY_SHELF; break;   /* Backspace */
+                    case 1:   k = RKEY_BACK; break;    /* KEY_ESC */
+                    case 2:   k = RKEY_LEFT; break;    /* KEY_LEFT */
+                    case 3:   k = RKEY_UP; break;      /* KEY_UP */
+                    case 4:   k = RKEY_RIGHT; break;   /* KEY_RIGHT */
+                    case 5:   k = RKEY_DOWN; break;    /* KEY_DOWN */
+                    case 6:   k = RKEY_PGUP; break;    /* KEY_PGUP */
+                    case 7:   k = RKEY_PGDN; break;    /* KEY_PGDN */
+                    case 8:   k = RKEY_SHELF; break;   /* Backspace */
                     case 10:
-                    case 13:  k = KEY_OK; break;      /* Enter */
-                    case 32:  k = KEY_SPACE; break;   /* Space */
+                    case 13:  k = RKEY_OK; break;      /* Enter */
+                    case 32:  k = RKEY_SPACE; break;   /* Space */
                     case 66:
-                    case 98:  k = KEY_SHELF; break;   /* B */
+                    case 98:  k = RKEY_SHELF; break;   /* B */
                     case 67:
-                    case 99:  k = KEY_TOC; break;     /* C */
+                    case 99:  k = RKEY_TOC; break;     /* C */
                     case 68:
-                    case 100: k = KEY_DELETE; break;  /* D */
+                    case 100: k = RKEY_DELETE; break;  /* D */
                     case 71:
-                    case 103: k = KEY_JUMP; break;    /* G */
+                    case 103: k = RKEY_JUMP; break;    /* G */
                     case 76:
-                    case 108: k = KEY_SPACING; break; /* L */
+                    case 108: k = RKEY_SPACING; break; /* L */
                     case 79:
-                    case 111: k = KEY_OPEN; break;    /* O */
+                    case 111: k = RKEY_OPEN; break;    /* O */
                     case 84:
-                    case 116: k = KEY_THEME; break;   /* T */
+                    case 116: k = RKEY_THEME; break;   /* T */
                     case 43:
-                    case 61:  k = KEY_FONT_UP; break; /* + */
-                    case 45:  k = KEY_FONT_DOWN; break; /* - */
+                    case 61:  k = RKEY_FONT_UP; break; /* + */
+                    case 45:  k = RKEY_FONT_DOWN; break; /* - */
                     default:  break;
                 }
-                if (k != KEY_NONE) {
+                if (k != RKEY_NONE) {
                     reader_on_key(k);
                     if (g_running) reader_render();
                 }

@@ -593,9 +593,9 @@ static void open_new_book_via_dialog(void) {
 }
 
 /* --- 按鍵處理 --- */
-void reader_on_key(KeyCode key) {
+void reader_on_key(ReaderKey key) {
     /* 共用配色切換 */
-    if (key == KEY_THEME) {
+    if (key == RKEY_THEME) {
         g_theme_idx = (g_theme_idx + 1) % 4;
         save_library();
         return;
@@ -604,18 +604,18 @@ void reader_on_key(KeyCode key) {
     /* 1. 書架頁面 */
     if (g_screen == SCREEN_SHELF) {
         switch (key) {
-            case KEY_UP:
-            case KEY_LEFT:
-            case KEY_PGUP:
+            case RKEY_UP:
+            case RKEY_LEFT:
+            case RKEY_PGUP:
                 if (g_shelf_sel > 0) g_shelf_sel--;
                 break;
-            case KEY_DOWN:
-            case KEY_RIGHT:
-            case KEY_PGDN:
+            case RKEY_DOWN:
+            case RKEY_RIGHT:
+            case RKEY_PGDN:
                 if (g_shelf_sel + 1 < g_book_count) g_shelf_sel++;
                 break;
-            case KEY_OK:
-            case KEY_SPACE:
+            case RKEY_OK:
+            case RKEY_SPACE:
                 if (g_book_count > 0) {
                     char target[512];
                     snprintf(target, sizeof(target), "%s", g_books[g_shelf_sel].path);
@@ -624,13 +624,13 @@ void reader_on_key(KeyCode key) {
                     open_new_book_via_dialog();
                 }
                 break;
-            case KEY_OPEN:
+            case RKEY_OPEN:
                 open_new_book_via_dialog();
                 break;
-            case KEY_DELETE:
+            case RKEY_DELETE:
                 remove_selected_book();
                 break;
-            case KEY_BACK:
+            case RKEY_BACK:
                 hal_request_quit();
                 break;
             default:
@@ -642,24 +642,24 @@ void reader_on_key(KeyCode key) {
     /* 2. 章節目錄頁面 */
     if (g_screen == SCREEN_TOC) {
         switch (key) {
-            case KEY_UP:
-            case KEY_LEFT:
+            case RKEY_UP:
+            case RKEY_LEFT:
                 if (g_toc_sel > 0) g_toc_sel--;
                 break;
-            case KEY_DOWN:
-            case KEY_RIGHT:
+            case RKEY_DOWN:
+            case RKEY_RIGHT:
                 if (g_toc_sel + 1 < g_chapter_count) g_toc_sel++;
                 break;
-            case KEY_PGUP:
+            case RKEY_PGUP:
                 g_toc_sel -= 8;
                 if (g_toc_sel < 0) g_toc_sel = 0;
                 break;
-            case KEY_PGDN:
+            case RKEY_PGDN:
                 g_toc_sel += 8;
                 if (g_toc_sel >= g_chapter_count) g_toc_sel = g_chapter_count > 0 ? g_chapter_count - 1 : 0;
                 break;
-            case KEY_OK:
-            case KEY_SPACE:
+            case RKEY_OK:
+            case RKEY_SPACE:
                 if (g_chapter_count > 0) {
                     jump_to_offset(g_chapters[g_toc_sel].offset);
                     g_screen = SCREEN_READ_TXT;
@@ -668,9 +668,9 @@ void reader_on_key(KeyCode key) {
                     g_screen = SCREEN_READ_TXT;
                 }
                 break;
-            case KEY_BACK:
-            case KEY_TOC:
-            case KEY_SHELF:
+            case RKEY_BACK:
+            case RKEY_TOC:
+            case RKEY_SHELF:
                 g_screen = SCREEN_READ_TXT;
                 break;
             default:
@@ -682,22 +682,22 @@ void reader_on_key(KeyCode key) {
     /* 3. 快速跳頁模式 */
     if (g_screen == SCREEN_JUMP) {
         switch (key) {
-            case KEY_LEFT:  g_jump_target -= 10; break;
-            case KEY_RIGHT: g_jump_target += 10; break;
-            case KEY_UP:    g_jump_target -= 50; break;
-            case KEY_DOWN:  g_jump_target += 50; break;
-            case KEY_PGUP:  g_jump_target -= 1;  break;
-            case KEY_PGDN:  g_jump_target += 1;  break;
-            case KEY_OK:
-            case KEY_SPACE:
+            case RKEY_LEFT:  g_jump_target -= 10; break;
+            case RKEY_RIGHT: g_jump_target += 10; break;
+            case RKEY_UP:    g_jump_target -= 50; break;
+            case RKEY_DOWN:  g_jump_target += 50; break;
+            case RKEY_PGUP:  g_jump_target -= 1;  break;
+            case RKEY_PGDN:  g_jump_target += 1;  break;
+            case RKEY_OK:
+            case RKEY_SPACE:
                 if (g_jump_target >= 0 && g_jump_target < g_page_count) {
                     g_current_page = g_jump_target;
                     save_bookmark();
                 }
                 g_screen = SCREEN_READ_TXT;
                 return;
-            case KEY_BACK:
-            case KEY_JUMP:
+            case RKEY_BACK:
+            case RKEY_JUMP:
                 g_screen = SCREEN_READ_TXT;
                 return;
             default:
@@ -711,30 +711,30 @@ void reader_on_key(KeyCode key) {
     /* 4. 圖片閱讀模式 */
     if (g_screen == SCREEN_READ_BMP) {
         switch (key) {
-            case KEY_LEFT:
-            case KEY_UP:
-            case KEY_PGUP: {
+            case RKEY_LEFT:
+            case RKEY_UP:
+            case RKEY_PGUP: {
                 char next_path[512] = {0};
                 if (hal_find_sibling_bmp(g_filepath, -1, next_path, sizeof(next_path))) {
                     snprintf(g_filepath, sizeof(g_filepath), "%s", next_path);
                 }
                 break;
             }
-            case KEY_RIGHT:
-            case KEY_DOWN:
-            case KEY_PGDN:
-            case KEY_SPACE: {
+            case RKEY_RIGHT:
+            case RKEY_DOWN:
+            case RKEY_PGDN:
+            case RKEY_SPACE: {
                 char next_path[512] = {0};
                 if (hal_find_sibling_bmp(g_filepath, 1, next_path, sizeof(next_path))) {
                     snprintf(g_filepath, sizeof(g_filepath), "%s", next_path);
                 }
                 break;
             }
-            case KEY_OPEN:
+            case RKEY_OPEN:
                 open_new_book_via_dialog();
                 break;
-            case KEY_BACK:
-            case KEY_SHELF:
+            case RKEY_BACK:
+            case RKEY_SHELF:
                 save_bookmark();
                 g_screen = SCREEN_SHELF;
                 break;
@@ -746,24 +746,24 @@ void reader_on_key(KeyCode key) {
 
     /* 5. TXT 閱讀模式 */
     switch (key) {
-        case KEY_LEFT:
-        case KEY_UP:
-        case KEY_PGUP:
+        case RKEY_LEFT:
+        case RKEY_UP:
+        case RKEY_PGUP:
             if (g_current_page > 0) {
                 g_current_page--;
                 save_bookmark();
             }
             break;
-        case KEY_RIGHT:
-        case KEY_DOWN:
-        case KEY_PGDN:
-        case KEY_SPACE:
+        case RKEY_RIGHT:
+        case RKEY_DOWN:
+        case RKEY_PGDN:
+        case RKEY_SPACE:
             if (g_current_page + 1 < g_page_count) {
                 g_current_page++;
                 save_bookmark();
             }
             break;
-        case KEY_TOC: {
+        case RKEY_TOC: {
             g_toc_sel = 0;
             if (g_page_offsets && g_page_count > 0) {
                 size_t cur_off = g_page_offsets[g_current_page];
@@ -776,32 +776,32 @@ void reader_on_key(KeyCode key) {
             g_screen = SCREEN_TOC;
             break;
         }
-        case KEY_JUMP:
+        case RKEY_JUMP:
             g_jump_target = g_current_page;
             g_screen = SCREEN_JUMP;
             break;
-        case KEY_SPACING:
+        case RKEY_SPACING:
             g_spacing_idx = (g_spacing_idx + 1) % 3;
             save_library();
             reader_on_resize();
             break;
-        case KEY_FONT_UP:
+        case RKEY_FONT_UP:
             if (g_font_size < 34) {
                 g_font_size += 2;
                 reader_on_resize();
             }
             break;
-        case KEY_FONT_DOWN:
+        case RKEY_FONT_DOWN:
             if (g_font_size > 14) {
                 g_font_size -= 2;
                 reader_on_resize();
             }
             break;
-        case KEY_OPEN:
+        case RKEY_OPEN:
             open_new_book_via_dialog();
             break;
-        case KEY_BACK:
-        case KEY_SHELF:
+        case RKEY_BACK:
+        case RKEY_SHELF:
             save_bookmark();
             g_screen = SCREEN_SHELF;
             break;
