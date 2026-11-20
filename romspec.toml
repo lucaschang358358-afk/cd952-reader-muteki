@@ -1,0 +1,11 @@
+[rom]
+title = "CD952 Reader"
+short-title = "Reader"
+category = "APPLET_TOOL"
+default-locale = "en"
+copyright = "CD952 Reader (MIT)"
+version = "1.0.0"
+
+[metadata.en]
+title = "CD952 Reader"
+short-title = "Reader"
