@@ -31,12 +31,42 @@ jobs:
             fi
             export PATH="/usr/lib/sdk/muteki/bin:$PATH"
 
-            CROSS_FILE=$(find /usr/lib/sdk/muteki -type f \( -name "*arm9*.ini" -o -name "*arm9*cross*" \) | head -n 1)
-            if [ -z "$CROSS_FILE" ]; then
-              CROSS_FILE=$(find /usr/lib/sdk/muteki -type f \( -name "*bestaeabi*.ini" -o -name "*cross*.ini" \) | head -n 1)
-            fi
-            echo "Using cross file: $CROSS_FILE"
+            echo "=== Muteki SDK files ==="
+            ls -la /usr/lib/sdk/muteki/ || true
 
+            # 1. 優先尋找 SDK 內建的 meson cross file
+            CROSS_FILE=$(find /usr/lib/sdk/muteki -path "*meson*cross*" -type f | grep -i "arm9" | head -n 1 || true)
+            if [ -z "$CROSS_FILE" ]; then
+              CROSS_FILE=$(find /usr/lib/sdk/muteki -path "*meson*cross*" -type f | head -n 1 || true)
+            fi
+
+            # 2. 若找不到內建設定檔，自動產生一份標準 arm-none-bestaeabi cross file
+            if [ -z "$CROSS_FILE" ]; then
+              GCC_BIN=$(find /usr/lib/sdk/muteki -name "arm-none-bestaeabi-gcc" -type f | head -n 1 || true)
+              if [ -z "$GCC_BIN" ]; then
+                echo "ERROR: Cannot find arm-none-bestaeabi-gcc in /usr/lib/sdk/muteki"
+                find /usr/lib/sdk/muteki -maxdepth 3
+                exit 1
+              fi
+              BIN_DIR=$(dirname "$GCC_BIN")
+              export PATH="$BIN_DIR:$PATH"
+              CROSS_FILE="$PWD/arm9-cross.ini"
+              cat > "$CROSS_FILE" <<EOF
+          [binaries]
+          c = '\''$BIN_DIR/arm-none-bestaeabi-gcc'\''
+          cpp = '\''$BIN_DIR/arm-none-bestaeabi-g++'\''
+          ar = '\''$BIN_DIR/arm-none-bestaeabi-ar'\''
+          strip = '\''$BIN_DIR/arm-none-bestaeabi-strip'\''
+
+          [host_machine]
+          system = '\''besta'\''
+          cpu_family = '\''arm'\''
+          cpu = '\''arm926ej-s'\''
+          endian = '\''little'\''
+          EOF
+            fi
+
+            echo "Using cross file: $CROSS_FILE"
             meson setup build-muteki --cross-file "$CROSS_FILE"
             meson compile -C build-muteki
             ls -la build-muteki/
