@@ -1,0 +1,49 @@
+name: Build CD-952 Muteki Reader
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-cd952:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Flatpak & Muteki SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.freedesktop.Sdk//24.08
+          curl -L -o muteki.flatpak \
+            https://github.com/Project-Muteki/org.freedesktop.Sdk.Extension.muteki/releases/download/2025082001/org.freedesktop.Sdk.Extension.muteki-x86_64-24.08-2025082001.flatpak
+          flatpak install --user -y muteki.flatpak
+
+      - name: Compile CD-952 .exe
+        run: |
+          flatpak run --user --filesystem=host --command=bash org.freedesktop.Sdk//24.08 -c '
+            set -e
+            if [ -f /usr/lib/sdk/muteki/enable.sh ]; then
+              source /usr/lib/sdk/muteki/enable.sh
+            fi
+            export PATH="/usr/lib/sdk/muteki/bin:$PATH"
+
+            CROSS_FILE=$(find /usr/lib/sdk/muteki -type f \( -name "*arm9*.ini" -o -name "*arm9*cross*" \) | head -n 1)
+            if [ -z "$CROSS_FILE" ]; then
+              CROSS_FILE=$(find /usr/lib/sdk/muteki -type f \( -name "*bestaeabi*.ini" -o -name "*cross*.ini" \) | head -n 1)
+            fi
+            echo "Using cross file: $CROSS_FILE"
+
+            meson setup build-muteki --cross-file "$CROSS_FILE"
+            meson compile -C build-muteki
+            ls -la build-muteki/
+          '
+
+      - name: Upload CD-952 .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: cd952-reader-muteki-exe
+          path: build-muteki/cd952-reader.exe
