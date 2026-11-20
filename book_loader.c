@@ -1,12 +1,16 @@
 #include "book_loader.h"
 #include "inflate_tiny.h"
+#include "jpeg_tiny.h"
+#include "png_tiny.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define MAX_BOOK_TEXT_BYTES (6u * 1024u * 1024u)
-#define MAX_STREAM_BYTES    (2u * 1024u * 1024u)
+#define MAX_STREAM_BYTES    (4u * 1024u * 1024u)
+#define COVER_THUMB_W       96
+#define COVER_THUMB_H       128
 
 typedef struct {
     char *data;
@@ -37,6 +41,10 @@ static void sb_append_char(StrBuf *sb, char c) {
     if (!sb_reserve(sb, 1)) return;
     sb->data[sb->len++] = c;
     sb->data[sb->len] = '\0';
+}
+
+static void sb_append_str(StrBuf *sb, const char *s) {
+    if (s) sb_append_mem(sb, s, strlen(s));
 }
 
 static void sb_append_utf8_cp(StrBuf *sb, uint32_t cp) {
@@ -109,6 +117,56 @@ static void get_base_title(const char *filepath, char *out, size_t out_sz) {
     out[len] = '\0';
 }
 
+/* 解析 ZIP 內相對路徑 (正確處理 ../ 與 ./) */
+static void resolve_zip_relpath(const char *cur_file, const char *rel, char *out, size_t out_sz) {
+    if (!rel || !rel[0]) { out[0] = '\0'; return; }
+    char combined[256];
+    if (rel[0] == '/') {
+        snprintf(combined, sizeof(combined), "%s", rel + 1);
+    } else {
+        const char *sl = cur_file ? strrchr(cur_file, '/') : NULL;
+        if (sl) {
+            size_t dlen = (size_t)(sl - cur_file) + 1;
+            if (dlen > 120) dlen = 120;
+            memcpy(combined, cur_file, dlen);
+            snprintf(combined + dlen, sizeof(combined) - dlen, "%s", rel);
+        } else {
+            snprintf(combined, sizeof(combined), "%s", rel);
+        }
+    }
+    /* 移除 #fragment 與 ?query */
+    char *q = strchr(combined, '#'); if (q) *q = '\0';
+    q = strchr(combined, '?'); if (q) *q = '\0';
+
+    /* 正規化 path segments */
+    const char *segs[32];
+    int seg_cnt = 0;
+    char *p = combined;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        char *start = p;
+        while (*p && *p != '/') p++;
+        if (*p == '/') *p++ = '\0';
+        if (strcmp(start, ".") == 0) continue;
+        if (strcmp(start, "..") == 0) {
+            if (seg_cnt > 0) seg_cnt--;
+            continue;
+        }
+        if (seg_cnt < 32) segs[seg_cnt++] = start;
+    }
+    out[0] = '\0';
+    size_t pos = 0;
+    for (int i = 0; i < seg_cnt; i++) {
+        size_t slen = strlen(segs[i]);
+        if (pos + slen + 2 >= out_sz) break;
+        if (i > 0) out[pos++] = '/';
+        memcpy(out + pos, segs[i], slen);
+        pos += slen;
+        out[pos] = '\0';
+    }
+}
+
 static void add_chapter(BookDoc *doc, size_t offset, const char *title) {
     if (doc->chapter_count >= BOOK_MAX_CHAPTERS) return;
     if (doc->chapter_count > 0 && doc->chapters[doc->chapter_count - 1].offset == offset) return;
@@ -116,6 +174,16 @@ static void add_chapter(BookDoc *doc, size_t offset, const char *title) {
     ch->offset = offset;
     trim_copy(ch->title, sizeof(ch->title), title, strlen(title));
     if (ch->title[0] == '\0') snprintf(ch->title, sizeof(ch->title), "章節 %d", doc->chapter_count);
+}
+
+static int add_epub_image(BookDoc *doc, const char *zip_path) {
+    if (!zip_path || !zip_path[0]) return -1;
+    if (!ends_with_ci(zip_path, ".jpg") && !ends_with_ci(zip_path, ".jpeg") && !ends_with_ci(zip_path, ".png"))
+        return -1;
+    if (doc->image_count >= BOOK_MAX_IMAGES) return -1;
+    int idx = doc->image_count++;
+    snprintf(doc->images[idx].zip_path, sizeof(doc->images[idx].zip_path), "%s", zip_path);
+    return idx;
 }
 
 BookFormat book_detect_format(const char *filepath) {
@@ -235,7 +303,7 @@ static int load_txt(const char *filepath, BookDoc *doc) {
     return (doc->text != NULL);
 }
 
-/* --- 原生 EPUB (ZIP + OPF + Spine + XHTML) 解析器 --- */
+/* --- 原生 EPUB (ZIP + OPF + Cover + Spine + XHTML + Inline Images) --- */
 typedef struct {
     char name[192];
     uint16_t method;
@@ -331,6 +399,121 @@ static const ZipEntry *zip_find(const ZipEntry *entries, int count, const char *
     return NULL;
 }
 
+static uint8_t *decode_raw_image_mem(const uint8_t *raw, size_t len, int *out_w, int *out_h) {
+    if (!raw || len < 16) return NULL;
+    static const uint8_t PNG_SIG[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+    if (memcmp(raw, PNG_SIG, 8) == 0) return tiny_png_decode(raw, len, out_w, out_h);
+    if (raw[0] == 0xFF && raw[1] == 0xD8) return tiny_jpeg_decode(raw, len, out_w, out_h);
+    return NULL;
+}
+
+/* 將 EPUB 真封面縮放為 96x128 並快取至 <filepath>.cov，讓書架瞬間載入零卡頓 */
+static void save_cover_thumb_from_rgb(const char *filepath, const uint8_t *rgb, int iw, int ih) {
+    if (!filepath || !rgb || iw <= 0 || ih <= 0) return;
+    int tw = COVER_THUMB_W, th = COVER_THUMB_H;
+    uint8_t *thumb = (uint8_t *)malloc((size_t)tw * (size_t)th * 3u);
+    if (!thumb) return;
+
+    for (int y = 0; y < th; y++) {
+        int sy = (y * ih) / th;
+        if (sy >= ih) sy = ih - 1;
+        for (int x = 0; x < tw; x++) {
+            int sx = (x * iw) / tw;
+            if (sx >= iw) sx = iw - 1;
+            const uint8_t *sp = rgb + ((size_t)sy * (size_t)iw + (size_t)sx) * 3u;
+            uint8_t *dp = thumb + ((size_t)y * (size_t)tw + (size_t)x) * 3u;
+            dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+        }
+    }
+
+    char cpath[420];
+    snprintf(cpath, sizeof(cpath), "%s.cov", filepath);
+    FILE *f = fopen(cpath, "wb");
+    if (f) {
+        uint8_t hdr[8] = { 'C', 'O', 'V', '1',
+                           (uint8_t)(tw & 0xFF), (uint8_t)((tw >> 8) & 0xFF),
+                           (uint8_t)(th & 0xFF), (uint8_t)((th >> 8) & 0xFF) };
+        fwrite(hdr, 1, 8, f);
+        fwrite(thumb, 1, (size_t)tw * (size_t)th * 3u, f);
+        fclose(f);
+    }
+    free(thumb);
+}
+
+uint8_t *book_load_cover_thumb(const char *filepath, int *out_w, int *out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!filepath || !filepath[0]) return NULL;
+    char cpath[420];
+    snprintf(cpath, sizeof(cpath), "%s.cov", filepath);
+    FILE *f = fopen(cpath, "rb");
+    if (!f) return NULL;
+    uint8_t hdr[8];
+    if (fread(hdr, 1, 8, f) != 8 || memcmp(hdr, "COV1", 4) != 0) { fclose(f); return NULL; }
+    int w = (int)hdr[4] | ((int)hdr[5] << 8);
+    int h = (int)hdr[6] | ((int)hdr[7] << 8);
+    if (w <= 0 || h <= 0 || w > 256 || h > 256) { fclose(f); return NULL; }
+    size_t need = (size_t)w * (size_t)h * 3u;
+    uint8_t *rgb = (uint8_t *)malloc(need);
+    if (!rgb || fread(rgb, 1, need, f) != need) { free(rgb); fclose(f); return NULL; }
+    fclose(f);
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+    return rgb;
+}
+
+uint8_t *book_extract_epub_image(const char *epub_path, const char *zip_path, int *out_w, int *out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!epub_path || !zip_path || !zip_path[0]) return NULL;
+
+    size_t zlen = 0;
+    uint8_t *zip = read_entire_file(epub_path, 24u * 1024u * 1024u, &zlen);
+    if (!zip) return NULL;
+
+    ZipEntry *entries = NULL; int entry_cnt = 0;
+    uint8_t *rgb = NULL;
+    if (parse_zip_directory(zip, zlen, &entries, &entry_cnt)) {
+        const ZipEntry *ze = zip_find(entries, entry_cnt, zip_path);
+        if (ze) {
+            size_t ilen = 0;
+            uint8_t *raw = zip_extract_entry(zip, zlen, ze, &ilen);
+            if (raw && ilen > 0) rgb = decode_raw_image_mem(raw, ilen, out_w, out_h);
+            free(raw);
+        }
+        free(entries);
+    }
+    free(zip);
+    return rgb;
+}
+
+static int extract_xml_attr(const char *tag, size_t tlen, const char *attr, char *out, size_t out_sz) {
+    const char *p = find_ci(tag, tlen, attr);
+    while (p) {
+        if (p == tag || isspace((unsigned char)p[-1]) || p[-1] == ':') {
+            const char *q = p + strlen(attr);
+            const char *end = tag + tlen;
+            while (q < end && (*q == ' ' || *q == '\t')) q++;
+            if (q < end && *q == '=') {
+                q++;
+                while (q < end && (*q == ' ' || *q == '\t')) q++;
+                if (q < end && (*q == '"' || *q == '\'')) {
+                    char quote = *q++;
+                    const char *vs = q;
+                    while (q < end && *q != quote) q++;
+                    size_t vl = (size_t)(q - vs);
+                    if (vl >= out_sz) vl = out_sz - 1;
+                    memcpy(out, vs, vl);
+                    out[vl] = '\0';
+                    return 1;
+                }
+            }
+        }
+        p = find_ci(p + 1, (size_t)(tag + tlen - (p + 1)), attr);
+    }
+    return 0;
+}
+
 static size_t decode_html_entity(const char *s, size_t rem, StrBuf *sb) {
     size_t end = 1;
     while (end < rem && end < 12 && s[end] != ';') end++;
@@ -359,7 +542,9 @@ static size_t decode_html_entity(const char *s, size_t rem, StrBuf *sb) {
     return end + 1;
 }
 
-static void xhtml_to_text(const char *html, size_t len, StrBuf *sb, char *out_heading, size_t heading_sz) {
+/* 解析 XHTML 文字 + 自動擷取 <img> / <image> 內嵌插圖標記 (\x01IMG:idx) */
+static void xhtml_to_text(const char *html, size_t len, const char *xhtml_zip_path,
+                          BookDoc *doc, StrBuf *sb, char *out_heading, size_t heading_sz) {
     out_heading[0] = '\0';
     int in_skip = 0, in_heading = 0, last_was_space = 1, nl_count = 0;
     StrBuf hbuf = {0};
@@ -383,6 +568,22 @@ static void xhtml_to_text(const char *html, size_t len, StrBuf *sb, char *out_he
 
             if (strcmp(tname, "style") == 0 || strcmp(tname, "script") == 0 || strcmp(tname, "head") == 0) {
                 in_skip = closing ? 0 : 1;
+            } else if (!in_skip && !closing && (strcmp(tname, "img") == 0 || strcmp(tname, "image") == 0)) {
+                char src[192] = {0};
+                int ok_src = extract_xml_attr(ts, tlen, "src", src, sizeof(src));
+                if (!ok_src) ok_src = extract_xml_attr(ts, tlen, "href", src, sizeof(src));
+                if (ok_src && src[0]) {
+                    char resolved[192];
+                    resolve_zip_relpath(xhtml_zip_path, src, resolved, sizeof(resolved));
+                    int img_id = add_epub_image(doc, resolved);
+                    if (img_id >= 0) {
+                        if (sb->len > 0 && sb->data[sb->len - 1] != '\n') sb_append_char(sb, '\n');
+                        char marker[32];
+                        snprintf(marker, sizeof(marker), "\x01IMG:%d\n", img_id);
+                        sb_append_str(sb, marker);
+                        nl_count = 1; last_was_space = 1;
+                    }
+                }
             } else if (strcmp(tname, "h1") == 0 || strcmp(tname, "h2") == 0 || strcmp(tname, "h3") == 0) {
                 if (!closing && out_heading[0] == '\0') { in_heading = 1; hbuf.len = 0; }
                 else if (closing && in_heading) {
@@ -430,23 +631,6 @@ static void xhtml_to_text(const char *html, size_t len, StrBuf *sb, char *out_he
     sb_append_char(sb, '\n');
 }
 
-static int extract_xml_attr(const char *tag, size_t tlen, const char *attr, char *out, size_t out_sz) {
-    const char *p = find_ci(tag, tlen, attr);
-    if (!p) return 0;
-    p += strlen(attr);
-    const char *end = tag + tlen;
-    while (p < end && (*p == ' ' || *p == '\t' || *p == '=')) p++;
-    if (p >= end || (*p != '"' && *p != '\'')) return 0;
-    char quote = *p++;
-    const char *val_start = p;
-    while (p < end && *p != quote) p++;
-    size_t vlen = (size_t)(p - val_start);
-    if (vlen >= out_sz) vlen = out_sz - 1;
-    memcpy(out, val_start, vlen);
-    out[vlen] = '\0';
-    return 1;
-}
-
 static void extract_xml_tag_text(const char *xml, size_t xlen, const char *open_tag, const char *close_tag, char *out, size_t out_sz) {
     const char *p = find_ci(xml, xlen, open_tag);
     if (!p) return;
@@ -460,7 +644,7 @@ static void extract_xml_tag_text(const char *xml, size_t xlen, const char *open_
     trim_copy(out, out_sz, p, (size_t)(c - p));
 }
 
-typedef struct { char id[64]; char href[160]; } OpfItem;
+typedef struct { char id[64]; char href[160]; int is_cover_prop; } OpfItem;
 
 static int load_epub(const char *filepath, BookDoc *doc) {
     size_t zlen = 0;
@@ -491,6 +675,7 @@ static int load_epub(const char *filepath, BookDoc *doc) {
 
     OpfItem *manifest = NULL; int man_cnt = 0;
     char (*spine_paths)[192] = NULL; int spine_cnt = 0;
+    char cover_meta_id[64] = {0};
 
     const ZipEntry *oe = opf_path[0] ? zip_find(entries, entry_cnt, opf_path) : NULL;
     if (oe) {
@@ -500,24 +685,56 @@ static int load_epub(const char *filepath, BookDoc *doc) {
             extract_xml_tag_text(ox, olen, "<dc:title", "</dc:title>", doc->title, sizeof(doc->title));
             extract_xml_tag_text(ox, olen, "<dc:creator", "</dc:creator>", doc->author, sizeof(doc->author));
 
+            /* 找 <meta name="cover" content="..."/> */
+            const char *mp = ox, *end = ox + olen;
+            while (mp < end) {
+                const char *tag = find_ci(mp, (size_t)(end - mp), "<meta ");
+                if (!tag) break;
+                const char *gt = (const char *)memchr(tag, '>', (size_t)(end - tag));
+                if (!gt) break;
+                char mname[32] = {0}, mcontent[64] = {0};
+                if (extract_xml_attr(tag, (size_t)(gt - tag), "name", mname, sizeof(mname)) &&
+                    str_eq_ci(mname, "cover") &&
+                    extract_xml_attr(tag, (size_t)(gt - tag), "content", mcontent, sizeof(mcontent))) {
+                    snprintf(cover_meta_id, sizeof(cover_meta_id), "%s", mcontent);
+                    break;
+                }
+                mp = gt + 1;
+            }
+
             manifest = (OpfItem *)calloc(512, sizeof(OpfItem));
             spine_paths = (char (*)[192])calloc(512, sizeof(*spine_paths));
             if (manifest && spine_paths) {
-                const char *p = ox, *end = ox + olen;
+                const char *p = ox;
                 while (p < end && man_cnt < 512) {
                     const char *tag = find_ci(p, (size_t)(end - p), "<item ");
                     if (!tag) break;
                     const char *gt = (const char *)memchr(tag, '>', (size_t)(end - tag));
                     if (!gt) break;
-                    char id[64] = {0}, href[160] = {0};
-                    if (extract_xml_attr(tag, (size_t)(gt - tag), "id", id, sizeof(id)) &&
-                        extract_xml_attr(tag, (size_t)(gt - tag), "href", href, sizeof(href))) {
+                    size_t tl = (size_t)(gt - tag);
+                    char id[64] = {0}, href[160] = {0}, props[64] = {0};
+                    if (extract_xml_attr(tag, tl, "id", id, sizeof(id)) &&
+                        extract_xml_attr(tag, tl, "href", href, sizeof(href))) {
                         snprintf(manifest[man_cnt].id, sizeof(manifest[man_cnt].id), "%s", id);
                         snprintf(manifest[man_cnt].href, sizeof(manifest[man_cnt].href), "%s", href);
+                        if (extract_xml_attr(tag, tl, "properties", props, sizeof(props)) &&
+                            find_ci(props, strlen(props), "cover-image")) {
+                            manifest[man_cnt].is_cover_prop = 1;
+                        }
                         man_cnt++;
                     }
                     p = gt + 1;
                 }
+
+                /* 優先順序尋找 EPUB 真封面圖片路徑 */
+                for (int m = 0; m < man_cnt && !doc->cover_zip_path[0]; m++) {
+                    if (manifest[m].is_cover_prop || (cover_meta_id[0] && strcmp(manifest[m].id, cover_meta_id) == 0)) {
+                        if (ends_with_ci(manifest[m].href, ".jpg") || ends_with_ci(manifest[m].href, ".jpeg") || ends_with_ci(manifest[m].href, ".png")) {
+                            snprintf(doc->cover_zip_path, sizeof(doc->cover_zip_path), "%s%s", base_dir, manifest[m].href);
+                        }
+                    }
+                }
+
                 p = ox;
                 while (p < end && spine_cnt < 512) {
                     const char *tag = find_ci(p, (size_t)(end - p), "<itemref");
@@ -540,6 +757,18 @@ static int load_epub(const char *filepath, BookDoc *doc) {
         }
     }
 
+    /* 若 OPF 未指定 cover，掃描 ZIP 中檔名含 cover 的圖片 */
+    if (!doc->cover_zip_path[0]) {
+        for (int i = 0; i < entry_cnt; i++) {
+            if ((ends_with_ci(entries[i].name, ".jpg") || ends_with_ci(entries[i].name, ".jpeg") || ends_with_ci(entries[i].name, ".png")) &&
+                find_ci(entries[i].name, strlen(entries[i].name), "cover")) {
+                snprintf(doc->cover_zip_path, sizeof(doc->cover_zip_path), "%s", entries[i].name);
+                break;
+            }
+        }
+    }
+
+    /* 解析所有章節與內嵌插圖 */
     StrBuf sb = {0};
     if (spine_cnt > 0 && spine_paths) {
         for (int s = 0; s < spine_cnt; s++) {
@@ -548,7 +777,7 @@ static int load_epub(const char *filepath, BookDoc *doc) {
             size_t xlen = 0; uint8_t *xdata = zip_extract_entry(zip, zlen, ze, &xlen);
             if (!xdata) continue;
             size_t ch_off = sb.len; char heading[88] = {0};
-            xhtml_to_text((const char *)xdata, xlen, &sb, heading, sizeof(heading));
+            xhtml_to_text((const char *)xdata, xlen, spine_paths[s], doc, &sb, heading, sizeof(heading));
             if (sb.len > ch_off + 2) {
                 if (!heading[0]) snprintf(heading, sizeof(heading), "第 %d 節", doc->chapter_count + 1);
                 add_chapter(doc, ch_off, heading);
@@ -561,13 +790,32 @@ static int load_epub(const char *filepath, BookDoc *doc) {
                 size_t xlen = 0; uint8_t *xdata = zip_extract_entry(zip, zlen, &entries[i], &xlen);
                 if (!xdata) continue;
                 size_t ch_off = sb.len; char heading[88] = {0};
-                xhtml_to_text((const char *)xdata, xlen, &sb, heading, sizeof(heading));
+                xhtml_to_text((const char *)xdata, xlen, entries[i].name, doc, &sb, heading, sizeof(heading));
                 if (sb.len > ch_off + 2) {
                     if (!heading[0]) snprintf(heading, sizeof(heading), "第 %d 節", doc->chapter_count + 1);
                     add_chapter(doc, ch_off, heading);
                 }
                 free(xdata);
             }
+        }
+    }
+
+    /* 若仍沒找到封面，取第一張插圖當封面；接著直接存出 96x128 封面快取檔 (.cov) */
+    if (!doc->cover_zip_path[0] && doc->image_count > 0) {
+        snprintf(doc->cover_zip_path, sizeof(doc->cover_zip_path), "%s", doc->images[0].zip_path);
+    }
+    if (doc->cover_zip_path[0]) {
+        const ZipEntry *cov_e = zip_find(entries, entry_cnt, doc->cover_zip_path);
+        if (cov_e) {
+            size_t clen = 0;
+            uint8_t *craw = zip_extract_entry(zip, zlen, cov_e, &clen);
+            if (craw && clen > 0) {
+                int cw = 0, ch = 0;
+                uint8_t *crgb = decode_raw_image_mem(craw, clen, &cw, &ch);
+                if (crgb && cw > 0 && ch > 0) save_cover_thumb_from_rgb(filepath, crgb, cw, ch);
+                free(crgb);
+            }
+            free(craw);
         }
     }
 

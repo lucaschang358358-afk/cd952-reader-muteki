@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #if __has_include(<muteki/common.h>)
 #include <muteki/common.h>
@@ -496,7 +497,28 @@ int hal_draw_image_file(const char *filepath, int x, int y, int w, int h) {
     return 1;
 }
 
-const char *hal_get_library_path(void) { return "C:\\cd952_books_v5.idx"; }
+const char *hal_get_library_path(void) { return "C:\\cd952_books_v6.idx"; }
+const char *hal_get_stats_path(void)   { return "C:\\cd952_stats.dat"; }
+
+void hal_get_local_time(int *y, int *m, int *d, int *hh, int *mm, int *ss) {
+    time_t now = time(NULL);
+    struct tm *lt = localtime(&now);
+    if (lt && lt->tm_year + 1900 >= 2000) {
+        if (y)  *y  = lt->tm_year + 1900;
+        if (m)  *m  = lt->tm_mon + 1;
+        if (d)  *d  = lt->tm_mday;
+        if (hh) *hh = lt->tm_hour;
+        if (mm) *mm = lt->tm_min;
+        if (ss) *ss = lt->tm_sec;
+    } else {
+        if (y)  *y  = 2026;
+        if (m)  *m  = 1;
+        if (d)  *d  = 1;
+        if (hh) *hh = 12;
+        if (mm) *mm = 0;
+        if (ss) *ss = 0;
+    }
+}
 
 int hal_open_file_dialog(char *out_path, int max_len) {
     UTF16 utf16path[FILEPICKER_CONTEXT_OUTPUT_MAX_LFN] = {0};
@@ -572,6 +594,7 @@ static ReaderKey map_key(short code, char *out_char) {
         case 50:  return RKEY_TAB2;
         case 51:  return RKEY_TAB3;
         case 52:  return RKEY_TAB4;
+        case 53:  return RKEY_TAB5;
         case 66: case 98:  return RKEY_SHELF;
         case 67: case 99:  return RKEY_TOC;
         case 68: case 100: return RKEY_DELETE;
@@ -607,9 +630,18 @@ int main(void) {
 
     ui_event_t uievent = {0};
     int touch_cooldown = 0;
+    time_t last_sec = time(NULL);
 
     while (g_running) {
         if (touch_cooldown > 0) touch_cooldown--;
+
+        time_t now_sec = time(NULL);
+        if (now_sec != last_sec) {
+            last_sec = now_sec;
+            if (reader_tick_second()) {
+                reader_render();
+            }
+        }
 
         if ((TestKeyEvent(&uievent) || MUTEKI_TEST_TOUCH(&uievent)) && GetEvent(&uievent)) {
             int handled = 0;

@@ -17,9 +17,11 @@ void ui_draw_badge(int x, int y, const char *tag, uint32_t bg, uint32_t fg);
 
 uint32_t ui_format_color(BookFormat fmt);
 void ui_draw_book_cover(int x, int y, int w, int h, const char *title, BookFormat fmt, int is_dark);
+void ui_draw_book_cover_img(int x, int y, int w, int h, const uint8_t *rgb, int img_w, int img_h, BookFormat fmt, int is_dark);
 
 void ui_icon_shelf(int cx, int cy, uint32_t col);
 void ui_icon_list(int cx, int cy, uint32_t col);
+void ui_icon_stats(int cx, int cy, uint32_t col);
 void ui_icon_palette(int cx, int cy, uint32_t col);
 void ui_icon_import(int cx, int cy, uint32_t col);
 void ui_icon_open_book(int cx, int cy, uint32_t accent, uint32_t page_col, uint32_t line_col);

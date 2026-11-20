@@ -31,6 +31,7 @@ typedef enum {
     RKEY_TAB2,
     RKEY_TAB3,
     RKEY_TAB4,
+    RKEY_TAB5,
     RKEY_FONT_UP,
     RKEY_FONT_DOWN,
     RKEY_CHAR
@@ -61,6 +62,8 @@ void hal_present(void);
 int  hal_draw_image_file(const char *filepath, int x, int y, int w, int h);
 
 const char *hal_get_library_path(void);
+const char *hal_get_stats_path(void);
+void hal_get_local_time(int *y, int *m, int *d, int *hh, int *mm, int *ss);
 int  hal_open_file_dialog(char *out_path, int max_len);
 int  hal_find_sibling_image(const char *current_path, int delta, char *out_path, int max_len);
 void hal_request_quit(void);

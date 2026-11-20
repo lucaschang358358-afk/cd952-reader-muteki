@@ -224,3 +224,26 @@ void ui_icon_open_book(int cx, int cy, uint32_t accent, uint32_t page_col, uint3
         hal_fill_rect(cx + 10, ly, 30, 3, line_col);
     }
 }
+
+void ui_draw_book_cover_img(int x, int y, int w, int h, const uint8_t *rgb, int img_w, int img_h, BookFormat fmt, int is_dark) {
+    uint32_t shcol = is_dark ? 0x090B0E : 0xC5BFB3;
+    ui_fill_round_rect(x + 4, y + 4, w, h, 7, shcol);
+    ui_fill_round_rect(x + 2, y + 2, w, h - 2, 6, 0xEDEBE4);
+    ui_fill_round_rect(x, y, w - 2, h - 2, 6, 0x1E293B);
+
+    /* 繪製真實 EPUB 封面縮圖並保留細緻外框與書脊高光 */
+    hal_blit_rgb888_scaled(rgb, img_w, img_h, x + 2, y + 2, w - 6, h - 6, x + 2, y + 2, w - 6, h - 6, 0);
+    hal_fill_rect(x + 2, y + 2, 3, h - 6, 0x202020);
+    ui_draw_round_rect(x, y, w - 2, h - 2, 6, is_dark ? 0x3B4454 : 0xB8B2A6);
+
+    const char *tag = book_format_tag(fmt);
+    int bw = ui_ascii_width(tag, 1) + 12;
+    ui_draw_badge(x + w - bw - 6, y + 6, tag, ui_format_color(fmt), 0xFFFFFF);
+}
+
+void ui_icon_stats(int cx, int cy, uint32_t col) {
+    hal_fill_rect(cx - 10, cy + 1, 5, 8, col);
+    hal_fill_rect(cx - 2,  cy - 4, 5, 13, col);
+    hal_fill_rect(cx + 6,  cy - 9, 5, 18, col);
+    hal_fill_rect(cx - 12, cy + 10, 25, 2, col);
+}

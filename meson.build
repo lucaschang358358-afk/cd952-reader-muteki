@@ -1,5 +1,5 @@
 project('cd952-reader', 'c',
-  version : '5.0.0',
+  version : '6.0.0',
   default_options : ['warning_level=2'])
 
 c = meson.get_compiler('c')
@@ -14,7 +14,7 @@ touch_adapt_h = custom_target('muteki-touch-adapt',
   command: [py3, '@INPUT@', '@OUTPUT@'])
 
 reader_elf = executable('cd952-reader',
-  [touch_adapt_h, 'inflate_tiny.c', 'jpeg_tiny.c', 'png_tiny.c', 'pdf_engine.c', 'book_loader.c', 'ui_gfx.c', 'reader_core.c', 'platform_muteki.c'],
+  [touch_adapt_h, 'inflate_tiny.c', 'jpeg_tiny.c', 'png_tiny.c', 'pdf_engine.c', 'book_loader.c', 'stats.c', 'ui_gfx.c', 'reader_core.c', 'platform_muteki.c'],
   name_suffix: 'elf',
   dependencies: mutekix_lib,
   install : false,
