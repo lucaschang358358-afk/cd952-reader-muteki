@@ -123,6 +123,7 @@ BookFormat book_detect_format(const char *filepath) {
     if (ends_with_ci(filepath, ".epub")) return BOOK_FMT_EPUB;
     if (ends_with_ci(filepath, ".pdf"))  return BOOK_FMT_PDF;
     if (ends_with_ci(filepath, ".bmp"))  return BOOK_FMT_BMP;
+    if (ends_with_ci(filepath, ".png"))  return BOOK_FMT_PNG;
     return BOOK_FMT_TXT;
 }
 
@@ -131,6 +132,7 @@ const char *book_format_tag(BookFormat fmt) {
         case BOOK_FMT_EPUB: return "EPUB";
         case BOOK_FMT_PDF:  return "PDF";
         case BOOK_FMT_BMP:  return "BMP";
+        case BOOK_FMT_PNG:  return "PNG";
         default:            return "TXT";
     }
 }
@@ -581,7 +583,7 @@ int book_load_document(const char *filepath, BookDoc *out_doc) {
     out_doc->format = book_detect_format(filepath);
     get_base_title(filepath, out_doc->title, sizeof(out_doc->title));
 
-    if (out_doc->format == BOOK_FMT_BMP || out_doc->format == BOOK_FMT_PDF) return 1;
+    if (out_doc->format == BOOK_FMT_BMP || out_doc->format == BOOK_FMT_PNG || out_doc->format == BOOK_FMT_PDF) return 1;
     if (out_doc->format == BOOK_FMT_EPUB) return load_epub(filepath, out_doc);
     return load_txt(filepath, out_doc);
 }

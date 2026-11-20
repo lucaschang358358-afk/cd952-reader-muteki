@@ -143,6 +143,7 @@ uint32_t ui_format_color(BookFormat fmt) {
         case BOOK_FMT_EPUB: return 0x10B981;
         case BOOK_FMT_PDF:  return 0xEF4444;
         case BOOK_FMT_BMP:  return 0xF59E0B;
+        case BOOK_FMT_PNG:  return 0x8B5CF6;
         default:            return 0x3B82F6;
     }
 }

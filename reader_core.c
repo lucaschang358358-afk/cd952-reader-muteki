@@ -8,18 +8,18 @@
 #include <string.h>
 
 /* ============================================================
- * CD-952 現代化全功能電子書閱讀器 v4
- *  - 真視覺化 PDF 閱讀引擎 (紙張/陰影/內嵌JPEG與Flate圖片/向量框線/定位中英文 + 縮放/平移/夜間反白 + 可選單頁重排)
- *  - 原生 EPUB (ZIP + OPF + Spine + XHTML + 章節目錄) / TXT (UTF-8/UTF-16) / 編號 BMP 圖片書
- *  - 現代 App 介面 (左側導覽列 + 繼續閱讀主卡片 + 4欄立體書封 + 4套現代主題色票)
- *  - 全套進階功能：多組手動書籤 (最多16筆)、全文關鍵字搜尋、章節目錄、視覺跳頁滑桿、ESC 閱讀控制面板
+ * CD-952 現代化全功能電子書閱讀器 v5
+ *  - 觸控點擊全面支援 (首頁/書架/主題/閱讀左右翻頁/工具列/彈窗選單/滑桿)
+ *  - 徹底修正 PDF 空白頁 (完整支援 ObjStm、2-byte CID、CMYK、Form 巢狀資源、1-bit 掃描圖與診斷卡)
+ *  - 徹底根治彈窗選單與書本文字重疊 (hal_clear_text_in_rect + 現代 75% 柔暗遮罩)
+ *  - 新增原生 PNG 解碼支援 (支援單張 .png 與編號 001.png 圖片書)
  * ============================================================ */
 
 typedef enum {
     SCR_HOME = 0,
     SCR_READ_TEXT,
     SCR_READ_PDF,
-    SCR_READ_BMP,
+    SCR_READ_IMG,
     SCR_READ_MENU,
     SCR_TOC,
     SCR_JUMP,
@@ -50,13 +50,9 @@ typedef struct {
 } AppTheme;
 
 static const AppTheme THEMES[4] = {
-    /* 0: 象牙晨光 */
     { "象牙晨光", "IVORY", 0, 0xF4F1EA, 0xEAE5DB, 0xFFFFFF, 0xDDD6C8, 0xD3CCC0, 0xEFECE4, 0x1F242B, 0x6B7280, 0x2563EB, 0xE2DDD2 },
-    /* 1: 護眼森綠 */
     { "護眼森綠", "SAGE",  0, 0xE3EFE5, 0xD4E5D7, 0xF3F9F4, 0xBBD2BF, 0xB0C7B4, 0xDBEADB, 0x1A2E20, 0x52725C, 0x059669, 0xC4DAC7 },
-    /* 2: 柔和暖茶 */
     { "柔和暖茶", "SEPIA", 0, 0xF2E7D5, 0xE7D8C0, 0xFAF4E8, 0xD9C7AB, 0xCCBA9D, 0xECE0CB, 0x3A291C, 0x7A624E, 0xC2410C, 0xDDD0BC },
-    /* 3: 暗夜極黑 */
     { "暗夜極黑", "NIGHT", 1, 0x111419, 0x171B22, 0x1C212A, 0x2B3340, 0x090B0E, 0x161A21, 0xE2E8F0, 0x8A94A6, 0x3B82F6, 0x2A313D }
 };
 
@@ -76,15 +72,15 @@ typedef struct {
 } BookEntry;
 
 typedef struct {
-    size_t pos_val; /* TXT/EPUB: byte offset; PDF: page_idx */
-    int page_num;   /* 1-based display page */
+    size_t pos_val;
+    int page_num;
     int pct;
     char label[72];
 } ManualBookmark;
 
 typedef struct {
-    size_t pos_val; /* TXT/EPUB: byte offset; PDF: page_idx */
-    int page_num;   /* 1-based */
+    size_t pos_val;
+    int page_num;
     char snippet[84];
 } SearchHit;
 
@@ -97,41 +93,35 @@ static const char *SPACING_NAMES[3] = { "緊湊", "標準", "寬鬆" };
 static const char *PDF_ZOOM_NAMES[5] = { "適應整頁", "適應寬度", "135%", "175%", "225%" };
 static const int FONT_H = 18;
 
-/* 書庫 */
 static BookEntry g_books[MAX_BOOKS];
 static int g_book_count = 0;
 static int g_shelf_sel = 0;
 static int g_manage_scroll = 0;
 static int g_appear_row = 0;
 
-/* 當前開啟書籍 (EPUB/TXT 或 真 PDF 或 BMP) */
 static char g_filepath[384] = {0};
 static BookDoc g_doc;
 static PdfDoc *g_pdf = NULL;
 
-/* TXT/EPUB 分頁 */
 static size_t *g_page_offsets = NULL;
 static int g_page_count = 0;
 static int g_current_page = 0;
 
-/* 真 PDF 檢視狀態 */
 static int g_pdf_page = 0;
-static int g_pdf_zoom = 0; /* 0=FitPage, 1=FitWidth, 2=135%, 3=175%, 4=225% */
+static int g_pdf_zoom = 0;
 static int g_pdf_pan_x = 0;
 static int g_pdf_pan_y = 0;
 static int g_pdf_last_pw = 800;
 static int g_pdf_last_ph = 400;
-static int g_pdf_reflow = 0; /* 0=真原版面PDF(預設), 1=單頁文字重排放大檢視 */
+static int g_pdf_reflow = 0;
 static char *g_pdf_reflow_text = NULL;
 static size_t g_pdf_reflow_len = 0;
 static int g_pdf_reflow_page_cached = -1;
 
-/* 多組手動書籤 */
 static ManualBookmark g_bmarks[MAX_BOOKMARKS];
 static int g_bmark_count = 0;
 static int g_bmark_sel = 0;
 
-/* 全文搜尋 */
 static char g_search_query[64] = {0};
 static SearchHit g_search_hits[MAX_SEARCH_HITS];
 static int g_search_cnt = 0;
@@ -139,14 +129,16 @@ static int g_search_sel = 0;
 static int g_search_scroll = 0;
 static int g_search_ran = 0;
 
-/* 控制選單 / 目錄 / 跳頁 / 提示 */
 static int g_read_menu_sel = 0;
 static int g_toc_sel = 0;
 static int g_toc_scroll = 0;
 static int g_jump_target = 0;
 static char g_toast_msg[128] = {0};
 
-/* --- UTF-8 與基礎輔助 --- */
+static int is_image_fmt(BookFormat fmt) {
+    return (fmt == BOOK_FMT_BMP || fmt == BOOK_FMT_PNG);
+}
+
 static int utf8_char_info(const unsigned char *s, size_t remaining, int *out_units) {
     if (remaining == 0) { *out_units = 0; return 0; }
     unsigned char c = s[0];
@@ -200,17 +192,16 @@ static void sanitize_field(char *dst, size_t sz, const char *src) {
 
 static ScreenMode active_read_screen(void) {
     if (g_doc.format == BOOK_FMT_PDF && g_pdf) return SCR_READ_PDF;
-    if (g_doc.format == BOOK_FMT_BMP) return SCR_READ_BMP;
+    if (is_image_fmt(g_doc.format)) return SCR_READ_IMG;
     return SCR_READ_TEXT;
 }
 
-/* --- 書庫索引讀寫 --- */
 static void save_library(void) {
     const char *lib_path = hal_get_library_path();
     if (!lib_path || !lib_path[0]) return;
     FILE *f = fopen(lib_path, "wb");
     if (!f) return;
-    fprintf(f, "#CFG4|%d|%d\n", g_theme_idx, g_spacing_idx);
+    fprintf(f, "#CFG5|%d|%d\n", g_theme_idx, g_spacing_idx);
     for (int i = 0; i < g_book_count; i++) {
         char t[96], a[64];
         sanitize_field(t, sizeof(t), g_books[i].title);
@@ -235,9 +226,10 @@ static void load_library(void) {
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
         if (len == 0) continue;
 
-        if (strncmp(line, "#CFG4|", 6) == 0 || strncmp(line, "#CFG3|", 6) == 0) {
+        if (strncmp(line, "#CFG", 4) == 0) {
+            const char *bar = strchr(line, '|');
             int th = 0, sp = 1;
-            if (sscanf(line + 6, "%d|%d", &th, &sp) == 2) {
+            if (bar && sscanf(bar + 1, "%d|%d", &th, &sp) == 2) {
                 if (th >= 0 && th < 4) g_theme_idx = th;
                 if (sp >= 0 && sp < 3) g_spacing_idx = sp;
             }
@@ -279,9 +271,7 @@ static void update_book_in_library(const char *path, BookFormat fmt, const char 
                                    size_t boff, size_t btot, int pidx, int pcnt) {
     if (!path || !path[0]) return;
     int found = -1;
-    for (int i = 0; i < g_book_count; i++) {
-        if (strcmp(g_books[i].path, path) == 0) { found = i; break; }
-    }
+    for (int i = 0; i < g_book_count; i++) if (strcmp(g_books[i].path, path) == 0) { found = i; break; }
 
     BookEntry cur;
     memset(&cur, 0, sizeof(cur));
@@ -306,36 +296,31 @@ static void update_book_in_library(const char *path, BookFormat fmt, const char 
     save_library();
 }
 
-static void remove_selected_book(void) {
-    if (g_book_count <= 0 || g_shelf_sel < 0 || g_shelf_sel >= g_book_count) return;
-    for (int i = g_shelf_sel; i + 1 < g_book_count; i++) g_books[i] = g_books[i + 1];
+static void remove_book_at(int idx) {
+    if (g_book_count <= 0 || idx < 0 || idx >= g_book_count) return;
+    for (int i = idx; i + 1 < g_book_count; i++) g_books[i] = g_books[i + 1];
     g_book_count--;
     if (g_shelf_sel >= g_book_count && g_book_count > 0) g_shelf_sel = g_book_count - 1;
     if (g_book_count == 0) { g_shelf_sel = 0; g_manage_scroll = 0; }
     save_library();
 }
 
-/* --- 自動進度書籤 + 多組手動書籤 (<file>.bmk2) --- */
 static void save_manual_bookmarks(void) {
     if (!g_filepath[0]) return;
-    char p[420];
-    snprintf(p, sizeof(p), "%s.bmk2", g_filepath);
+    char p[420]; snprintf(p, sizeof(p), "%s.bmk2", g_filepath);
     FILE *f = fopen(p, "wb");
     if (!f) return;
     for (int i = 0; i < g_bmark_count; i++) {
-        char lbl[72];
-        sanitize_field(lbl, sizeof(lbl), g_bmarks[i].label);
+        char lbl[72]; sanitize_field(lbl, sizeof(lbl), g_bmarks[i].label);
         fprintf(f, "%zu|%d|%d|%s\n", g_bmarks[i].pos_val, g_bmarks[i].page_num, g_bmarks[i].pct, lbl);
     }
     fclose(f);
 }
 
 static void load_manual_bookmarks(const char *filepath) {
-    g_bmark_count = 0;
-    g_bmark_sel = 0;
+    g_bmark_count = 0; g_bmark_sel = 0;
     if (!filepath || !filepath[0]) return;
-    char p[420];
-    snprintf(p, sizeof(p), "%s.bmk2", filepath);
+    char p[420]; snprintf(p, sizeof(p), "%s.bmk2", filepath);
     FILE *f = fopen(p, "rb");
     if (!f) return;
     char line[256];
@@ -369,27 +354,20 @@ static void add_current_manual_bookmark(void) {
         if (pt && tlen > 2) {
             char clean[72]; sanitize_field(clean, sizeof(clean), pt);
             utf8_ellipsis(clean, 28, bm->label, sizeof(bm->label));
-        } else {
-            snprintf(bm->label, sizeof(bm->label), "PDF 圖像頁 #%d", g_pdf_page + 1);
-        }
+        } else snprintf(bm->label, sizeof(bm->label), "PDF 圖像頁 #%d", g_pdf_page + 1);
         free(pt);
     } else if (g_doc.text && g_page_offsets && g_page_count > 0) {
         size_t off = g_page_offsets[g_current_page];
         bm->pos_val = off;
         bm->page_num = g_current_page + 1;
         bm->pct = ((g_current_page + 1) * 100) / g_page_count;
-        char raw[80];
-        size_t rem = g_doc.text_len - off;
-        if (rem > 70) rem = 70;
+        char raw[80]; size_t rem = g_doc.text_len - off; if (rem > 70) rem = 70;
         memcpy(raw, g_doc.text + off, rem); raw[rem] = '\0';
         char clean[80]; sanitize_field(clean, sizeof(clean), raw);
         utf8_ellipsis(clean, 28, bm->label, sizeof(bm->label));
-    } else {
-        return;
-    }
+    } else return;
 
-    g_bmark_count++;
-    g_bmark_sel = g_bmark_count - 1;
+    g_bmark_count++; g_bmark_sel = g_bmark_count - 1;
     save_manual_bookmarks();
 }
 
@@ -397,18 +375,16 @@ static void save_bookmark(void) {
     if (!g_filepath[0]) return;
     if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
         int tot = pdf_page_count(g_pdf);
-        char bmk_path[420];
-        snprintf(bmk_path, sizeof(bmk_path), "%s.bmk", g_filepath);
+        char bmk_path[420]; snprintf(bmk_path, sizeof(bmk_path), "%s.bmk", g_filepath);
         FILE *f = fopen(bmk_path, "wb");
         if (f) { fprintf(f, "%d", g_pdf_page); fclose(f); }
         update_book_in_library(g_filepath, BOOK_FMT_PDF, g_doc.title, g_doc.author,
                                (size_t)g_pdf_page, (size_t)tot, g_pdf_page, tot);
-    } else if (g_doc.format == BOOK_FMT_BMP) {
-        update_book_in_library(g_filepath, BOOK_FMT_BMP, g_doc.title, "", 0, 0, 0, 0);
+    } else if (is_image_fmt(g_doc.format)) {
+        update_book_in_library(g_filepath, g_doc.format, g_doc.title, "", 0, 0, 0, 0);
     } else if (g_page_count > 0 && g_page_offsets) {
         size_t off = g_page_offsets[g_current_page];
-        char bmk_path[420];
-        snprintf(bmk_path, sizeof(bmk_path), "%s.bmk", g_filepath);
+        char bmk_path[420]; snprintf(bmk_path, sizeof(bmk_path), "%s.bmk", g_filepath);
         FILE *f = fopen(bmk_path, "wb");
         if (f) { fprintf(f, "%zu", off); fclose(f); }
         update_book_in_library(g_filepath, g_doc.format, g_doc.title, g_doc.author,
@@ -418,44 +394,27 @@ static void save_bookmark(void) {
 
 static size_t load_bookmark(const char *path) {
     if (!path || !path[0]) return 0;
-    char bmk_path[420];
-    snprintf(bmk_path, sizeof(bmk_path), "%s.bmk", path);
+    char bmk_path[420]; snprintf(bmk_path, sizeof(bmk_path), "%s.bmk", path);
     FILE *f = fopen(bmk_path, "rb");
     if (f) {
         size_t off = 0;
         if (fscanf(f, "%zu", &off) == 1) { fclose(f); return off; }
         fclose(f);
     }
-    for (int i = 0; i < g_book_count; i++) {
-        if (strcmp(g_books[i].path, path) == 0) return g_books[i].byte_offset;
-    }
+    for (int i = 0; i < g_book_count; i++) if (strcmp(g_books[i].path, path) == 0) return g_books[i].byte_offset;
     return 0;
 }
 
-/* --- TXT/EPUB 排版分頁 --- */
 static size_t scan_one_line_buf(const char *buf, size_t len, size_t start_off, int max_units, size_t *out_draw_len) {
-    size_t pos = start_off;
-    int units = 0;
+    size_t pos = start_off; int units = 0;
     while (pos < len) {
         char ch = buf[pos];
-        if (ch == '\r') {
-            *out_draw_len = pos - start_off;
-            pos++;
-            if (pos < len && buf[pos] == '\n') pos++;
-            return pos - start_off;
-        }
-        if (ch == '\n') {
-            *out_draw_len = pos - start_off;
-            return (pos - start_off) + 1;
-        }
+        if (ch == '\r') { *out_draw_len = pos - start_off; pos++; if (pos < len && buf[pos] == '\n') pos++; return pos - start_off; }
+        if (ch == '\n') { *out_draw_len = pos - start_off; return (pos - start_off) + 1; }
         int u = 0;
         int clen = utf8_char_info((const unsigned char *)(buf + pos), len - pos, &u);
-        if (units + u > max_units && pos > start_off) {
-            *out_draw_len = pos - start_off;
-            return pos - start_off;
-        }
-        units += u;
-        pos += (size_t)clen;
+        if (units + u > max_units && pos > start_off) { *out_draw_len = pos - start_off; return pos - start_off; }
+        units += u; pos += (size_t)clen;
     }
     *out_draw_len = pos - start_off;
     return pos - start_off;
@@ -465,12 +424,9 @@ static void get_layout_params(int *out_max_units, int *out_lines_per_page, int *
     int w = hal_get_width(), h = hal_get_height();
     int pad_x = 28, top_bar = 36, bot_bar = 38;
     int line_h = FONT_H + SPACING_PX[g_spacing_idx];
-    int usable_w = w - pad_x * 2;
-    if (usable_w < 160) usable_w = 160;
-    int max_units = usable_w / 9;
-    if (max_units < 14) max_units = 14;
-    int lines = (h - top_bar - bot_bar - 18) / line_h;
-    if (lines < 1) lines = 1;
+    int usable_w = w - pad_x * 2; if (usable_w < 160) usable_w = 160;
+    int max_units = usable_w / 9; if (max_units < 14) max_units = 14;
+    int lines = (h - top_bar - bot_bar - 18) / line_h; if (lines < 1) lines = 1;
     *out_max_units = max_units; *out_lines_per_page = lines; *out_line_h = line_h;
 }
 
@@ -484,10 +440,7 @@ static void jump_to_offset(size_t target_offset) {
 
 static int find_page_for_offset(size_t off) {
     int pg = 0;
-    for (int i = 0; i < g_page_count; i++) {
-        if (g_page_offsets[i] <= off) pg = i;
-        else break;
-    }
+    for (int i = 0; i < g_page_count; i++) { if (g_page_offsets[i] <= off) pg = i; else break; }
     return pg;
 }
 
@@ -496,8 +449,7 @@ static void repaginate(size_t target_offset) {
     int max_units, lines_per_page, line_h;
     get_layout_params(&max_units, &lines_per_page, &line_h);
 
-    free(g_page_offsets);
-    g_page_offsets = NULL; g_page_count = 0;
+    free(g_page_offsets); g_page_offsets = NULL; g_page_count = 0;
     int cap = 128;
     g_page_offsets = (size_t *)malloc((size_t)cap * sizeof(size_t));
     if (!g_page_offsets) return;
@@ -534,7 +486,6 @@ static const char *get_current_chapter_name(void) {
     return best;
 }
 
-/* --- 全文搜尋引擎 (同時支援 EPUB / TXT / PDF) --- */
 static const char *find_ci_str(const char *hay, size_t hlen, const char *needle) {
     size_t nlen = strlen(needle);
     if (nlen == 0 || nlen > hlen) return NULL;
@@ -547,10 +498,7 @@ static const char *find_ci_str(const char *hay, size_t hlen, const char *needle)
 }
 
 static void run_fulltext_search(void) {
-    g_search_cnt = 0;
-    g_search_sel = 0;
-    g_search_scroll = 0;
-    g_search_ran = 1;
+    g_search_cnt = 0; g_search_sel = 0; g_search_scroll = 0; g_search_ran = 1;
     if (!g_search_query[0]) return;
 
     if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
@@ -562,8 +510,7 @@ static void run_fulltext_search(void) {
                 const char *hit = find_ci_str(pt, tlen, g_search_query);
                 if (hit) {
                     SearchHit *sh = &g_search_hits[g_search_cnt++];
-                    sh->pos_val = (size_t)p;
-                    sh->page_num = p + 1;
+                    sh->pos_val = (size_t)p; sh->page_num = p + 1;
                     size_t off = (size_t)(hit - pt);
                     size_t ctx_s = (off > 12) ? (off - 12) : 0;
                     while (ctx_s < off && ((unsigned char)pt[ctx_s] & 0xC0) == 0x80) ctx_s++;
@@ -579,15 +526,13 @@ static void run_fulltext_search(void) {
     }
 
     if (g_doc.text && g_doc.text_len > 0) {
-        size_t pos = 0;
-        size_t qlen = strlen(g_search_query);
+        size_t pos = 0, qlen = strlen(g_search_query);
         while (pos < g_doc.text_len && g_search_cnt < MAX_SEARCH_HITS) {
             const char *hit = find_ci_str(g_doc.text + pos, g_doc.text_len - pos, g_search_query);
             if (!hit) break;
             size_t off = (size_t)(hit - g_doc.text);
             SearchHit *sh = &g_search_hits[g_search_cnt++];
-            sh->pos_val = off;
-            sh->page_num = find_page_for_offset(off) + 1;
+            sh->pos_val = off; sh->page_num = find_page_for_offset(off) + 1;
 
             size_t ctx_s = (off > 12) ? (off - 12) : 0;
             while (ctx_s < off && ((unsigned char)g_doc.text[ctx_s] & 0xC0) == 0x80) ctx_s++;
@@ -595,7 +540,6 @@ static void run_fulltext_search(void) {
             memcpy(raw, g_doc.text + ctx_s, rlen); raw[rlen] = '\0';
             char clean[96]; sanitize_field(clean, sizeof(clean), raw);
             utf8_ellipsis(clean, 36, sh->snippet, sizeof(sh->snippet));
-
             pos = off + qlen;
         }
     }
@@ -607,6 +551,7 @@ static void show_loading_card(const char *filepath) {
     BookFormat fmt = book_detect_format(filepath);
     int cw = 390, ch = 126, cx = (w - cw) / 2, cy = (h - ch) / 2;
 
+    hal_clear_text_in_rect(cx - 8, cy - 6, cw + 16, ch + 12);
     ui_card(cx, cy, cw, ch, 12, th->card_bg, th->card_border, th->shadow, 1, ui_format_color(fmt));
     ui_draw_badge(cx + 20, cy + 20, book_format_tag(fmt), ui_format_color(fmt), 0xFFFFFF);
     hal_set_text_bg(th->card_bg);
@@ -629,7 +574,6 @@ static void clamp_pdf_pan(void) {
     if (g_pdf_pan_y > max_y) g_pdf_pan_y = max_y;
 }
 
-/* --- 公開介面 --- */
 void reader_init(void) {
     memset(&g_doc, 0, sizeof(g_doc));
     g_pdf = NULL;
@@ -651,11 +595,7 @@ void reader_shutdown(void) {
 
 int reader_open_file(const char *filepath) {
     if (!filepath || !filepath[0]) return 0;
-
-    if (g_screen != SCR_HOME) {
-        save_bookmark();
-        save_manual_bookmarks();
-    }
+    if (g_screen != SCR_HOME) { save_bookmark(); save_manual_bookmarks(); }
 
     show_loading_card(filepath);
 
@@ -666,15 +606,14 @@ int reader_open_file(const char *filepath) {
             snprintf(g_toast_msg, sizeof(g_toast_msg), "無法開啟 PDF：%s", get_filename_only(filepath));
             return 0;
         }
-        pdf_close(g_pdf);
-        g_pdf = nd;
+        pdf_close(g_pdf); g_pdf = nd;
         free(g_pdf_reflow_text); g_pdf_reflow_text = NULL; g_pdf_reflow_page_cached = -1;
         book_doc_free(&g_doc);
         g_doc.format = BOOK_FMT_PDF;
         const char *pt = pdf_get_title(g_pdf);
         utf8_ellipsis((pt && pt[0]) ? pt : get_filename_only(filepath), 44, g_doc.title, sizeof(g_doc.title));
         sanitize_field(g_doc.author, sizeof(g_doc.author), pdf_get_author(g_pdf));
-        /* 建立每頁 PDF 目錄項目 */
+
         int pcnt = pdf_page_count(g_pdf);
         int cap = pcnt > BOOK_MAX_CHAPTERS ? BOOK_MAX_CHAPTERS : pcnt;
         for (int i = 0; i < cap; i++) {
@@ -708,9 +647,9 @@ int reader_open_file(const char *filepath) {
     g_toast_msg[0] = '\0';
     load_manual_bookmarks(g_filepath);
 
-    if (g_doc.format == BOOK_FMT_BMP) {
+    if (is_image_fmt(g_doc.format)) {
         free(g_page_offsets); g_page_offsets = NULL; g_page_count = 0;
-        g_screen = SCR_READ_BMP;
+        g_screen = SCR_READ_IMG;
         save_bookmark();
         return 1;
     }
@@ -723,9 +662,7 @@ int reader_open_file(const char *filepath) {
 }
 
 void reader_on_resize(void) {
-    if (g_doc.text && g_page_offsets && g_page_count > 0) {
-        repaginate(g_page_offsets[g_current_page]);
-    }
+    if (g_doc.text && g_page_offsets && g_page_count > 0) repaginate(g_page_offsets[g_current_page]);
 }
 
 static void open_new_book_dialog(void) {
@@ -748,27 +685,48 @@ static void open_toc_screen(void) {
     g_screen = SCR_TOC;
 }
 
+static void activate_read_menu_item(int idx) {
+    switch (idx) {
+        case 0: g_screen = active_read_screen(); break;
+        case 1: open_toc_screen(); break;
+        case 2: g_screen = SCR_BOOKMARKS; break;
+        case 3: g_search_ran = 0; g_screen = SCR_SEARCH; break;
+        case 4: g_theme_idx = (g_theme_idx + 1) % 4; save_library(); break;
+        case 5:
+            if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
+                g_pdf_zoom = (g_pdf_zoom + 1) % 5; g_pdf_pan_x = 0; g_pdf_pan_y = 0;
+            } else {
+                g_spacing_idx = (g_spacing_idx + 1) % 3; save_library(); reader_on_resize();
+            }
+            break;
+        case 6:
+            if (g_doc.format == BOOK_FMT_PDF && g_pdf) { g_jump_target = g_pdf_page; g_screen = SCR_JUMP; }
+            else if (g_page_count > 0) { g_jump_target = g_current_page; g_screen = SCR_JUMP; }
+            break;
+        case 7:
+            save_bookmark(); save_manual_bookmarks();
+            g_screen = SCR_HOME;
+            break;
+    }
+}
+
 /* ============================================================
- * 按鍵與字元事件處理
+ * 按鍵事件處理
  * ============================================================ */
 void reader_on_key(ReaderKey key, char raw_char) {
     int is_ok = (key == RKEY_OK || key == RKEY_SPACE);
 
-    /* 0. 全文搜尋畫面 (優先接收實體鍵盤打字!) */
     if (g_screen == SCR_SEARCH) {
         if (key == RKEY_BACK) { g_screen = active_read_screen(); return; }
         if (key == RKEY_BACKSPACE) {
             size_t n = strlen(g_search_query);
             if (n > 0) {
-                /* 安全刪除一個 UTF-8 字元 */
                 while (n > 0 && ((unsigned char)g_search_query[n - 1] & 0xC0) == 0x80) n--;
                 if (n > 0) n--;
-                g_search_query[n] = '\0';
-                g_search_ran = 0;
+                g_search_query[n] = '\0'; g_search_ran = 0;
             }
             return;
         }
-        /* 快速中文常用關鍵字 (僅當搜尋欄為空時按 1~4 快速填入) */
         if (g_search_query[0] == '\0' && (key == RKEY_TAB1 || key == RKEY_TAB2 || key == RKEY_TAB3 || key == RKEY_TAB4)) {
             const char *presets[4] = { "第一章", "序章", "結論", "重點" };
             snprintf(g_search_query, sizeof(g_search_query), "%s", presets[key - RKEY_TAB1]);
@@ -778,43 +736,28 @@ void reader_on_key(ReaderKey key, char raw_char) {
         if (key == RKEY_UP) { if (g_search_sel > 0) g_search_sel--; return; }
         if (key == RKEY_DOWN) { if (g_search_sel + 1 < g_search_cnt) g_search_sel++; return; }
         if (key == RKEY_OK) {
-            if (!g_search_ran) {
-                run_fulltext_search();
-            } else if (g_search_cnt > 0) {
+            if (!g_search_ran) run_fulltext_search();
+            else if (g_search_cnt > 0) {
                 SearchHit *sh = &g_search_hits[g_search_sel];
-                if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
-                    g_pdf_page = (int)sh->pos_val; g_pdf_pan_x = 0; g_pdf_pan_y = 0;
-                } else {
-                    jump_to_offset(sh->pos_val);
-                }
+                if (g_doc.format == BOOK_FMT_PDF && g_pdf) { g_pdf_page = (int)sh->pos_val; g_pdf_pan_x = 0; g_pdf_pan_y = 0; }
+                else jump_to_offset(sh->pos_val);
                 save_bookmark();
                 g_screen = active_read_screen();
-            } else {
-                run_fulltext_search();
-            }
+            } else run_fulltext_search();
             return;
         }
-        /* 直接接收鍵盤字元輸入 (A-Z, a-z, 0-9, Space, - _ .) */
         if (raw_char >= 0x20 && raw_char < 0x7F) {
             size_t n = strlen(g_search_query);
-            if (n + 1 < sizeof(g_search_query)) {
-                g_search_query[n] = raw_char;
-                g_search_query[n + 1] = '\0';
-                g_search_ran = 0;
-            }
+            if (n + 1 < sizeof(g_search_query)) { g_search_query[n] = raw_char; g_search_query[n + 1] = '\0'; g_search_ran = 0; }
         }
         return;
     }
 
-    /* 1. 多組手動書籤管理畫面 */
     if (g_screen == SCR_BOOKMARKS) {
         if (key == RKEY_BACK || key == RKEY_BOOKMARK) { g_screen = active_read_screen(); return; }
         if (key == RKEY_UP || key == RKEY_LEFT) { if (g_bmark_sel > 0) g_bmark_sel--; return; }
         if (key == RKEY_DOWN || key == RKEY_RIGHT) { if (g_bmark_sel + 1 < g_bmark_count) g_bmark_sel++; return; }
-        if (key == RKEY_SPACE || key == RKEY_FONT_UP) {
-            add_current_manual_bookmark();
-            return;
-        }
+        if (key == RKEY_SPACE || key == RKEY_FONT_UP) { add_current_manual_bookmark(); return; }
         if (key == RKEY_DELETE && g_bmark_count > 0) {
             for (int i = g_bmark_sel; i + 1 < g_bmark_count; i++) g_bmarks[i] = g_bmarks[i + 1];
             g_bmark_count--;
@@ -823,16 +766,13 @@ void reader_on_key(ReaderKey key, char raw_char) {
             return;
         }
         if (key == RKEY_OK) {
-            if (g_bmark_count == 0) {
-                add_current_manual_bookmark();
-            } else {
+            if (g_bmark_count == 0) add_current_manual_bookmark();
+            else {
                 ManualBookmark *bm = &g_bmarks[g_bmark_sel];
                 if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
                     int p = (int)bm->pos_val;
                     if (p >= 0 && p < pdf_page_count(g_pdf)) { g_pdf_page = p; g_pdf_pan_x = 0; g_pdf_pan_y = 0; }
-                } else {
-                    jump_to_offset(bm->pos_val);
-                }
+                } else jump_to_offset(bm->pos_val);
                 save_bookmark();
                 g_screen = active_read_screen();
             }
@@ -840,7 +780,6 @@ void reader_on_key(ReaderKey key, char raw_char) {
         return;
     }
 
-    /* 2. 現代化首頁 */
     if (g_screen == SCR_HOME) {
         if (key == RKEY_TAB1) { g_home_tab = TAB_SHELF; return; }
         if (key == RKEY_TAB2) { g_home_tab = TAB_MANAGE; return; }
@@ -878,7 +817,7 @@ void reader_on_key(ReaderKey key, char raw_char) {
                 else if (g_shelf_sel + 1 < g_book_count) g_shelf_sel = g_book_count - 1;
             } else if (key == RKEY_PGUP) { g_shelf_sel = (g_shelf_sel >= 4) ? (g_shelf_sel - 4) : 0; }
             else if (key == RKEY_PGDN) { g_shelf_sel = (g_shelf_sel + 4 < g_book_count) ? (g_shelf_sel + 4) : (g_book_count - 1); }
-            else if (key == RKEY_DELETE) remove_selected_book();
+            else if (key == RKEY_DELETE) remove_book_at(g_shelf_sel);
             else if (is_ok) {
                 char target[384]; snprintf(target, sizeof(target), "%s", g_books[g_shelf_sel].path);
                 reader_open_file(target);
@@ -889,7 +828,7 @@ void reader_on_key(ReaderKey key, char raw_char) {
         if (g_home_tab == TAB_MANAGE) {
             if (key == RKEY_UP || key == RKEY_LEFT || key == RKEY_PGUP) { if (g_shelf_sel > 0) g_shelf_sel--; }
             else if (key == RKEY_DOWN || key == RKEY_RIGHT || key == RKEY_PGDN) { if (g_shelf_sel + 1 < g_book_count) g_shelf_sel++; }
-            else if (key == RKEY_DELETE) remove_selected_book();
+            else if (key == RKEY_DELETE) remove_book_at(g_shelf_sel);
             else if (is_ok) {
                 char target[384]; snprintf(target, sizeof(target), "%s", g_books[g_shelf_sel].path);
                 reader_open_file(target);
@@ -899,7 +838,6 @@ void reader_on_key(ReaderKey key, char raw_char) {
         return;
     }
 
-    /* 3. 閱讀控制面板 (ESC / M) */
     if (g_screen == SCR_READ_MENU) {
         if (key == RKEY_BACK || key == RKEY_MENU) { g_screen = active_read_screen(); return; }
         if (key == RKEY_UP) { g_read_menu_sel = (g_read_menu_sel + 7) % 8; return; }
@@ -916,37 +854,10 @@ void reader_on_key(ReaderKey key, char raw_char) {
             }
             return;
         }
-        if (is_ok) {
-            switch (g_read_menu_sel) {
-                case 0: g_screen = active_read_screen(); break;
-                case 1: open_toc_screen(); break;
-                case 2: g_screen = SCR_BOOKMARKS; break;
-                case 3: g_search_ran = 0; g_screen = SCR_SEARCH; break;
-                case 4: g_theme_idx = (g_theme_idx + 1) % 4; save_library(); break;
-                case 5:
-                    if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
-                        g_pdf_zoom = (g_pdf_zoom + 1) % 5; g_pdf_pan_x = 0; g_pdf_pan_y = 0;
-                    } else {
-                        g_spacing_idx = (g_spacing_idx + 1) % 3; save_library(); reader_on_resize();
-                    }
-                    break;
-                case 6:
-                    if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
-                        g_jump_target = g_pdf_page; g_screen = SCR_JUMP;
-                    } else if (g_page_count > 0) {
-                        g_jump_target = g_current_page; g_screen = SCR_JUMP;
-                    }
-                    break;
-                case 7:
-                    save_bookmark(); save_manual_bookmarks();
-                    g_screen = SCR_HOME;
-                    break;
-            }
-        }
+        if (is_ok) activate_read_menu_item(g_read_menu_sel);
         return;
     }
 
-    /* 4. 目錄 */
     if (g_screen == SCR_TOC) {
         if (key == RKEY_BACK || key == RKEY_TOC) { g_screen = active_read_screen(); return; }
         if (key == RKEY_UP || key == RKEY_LEFT) { if (g_toc_sel > 0) g_toc_sel--; return; }
@@ -959,12 +870,8 @@ void reader_on_key(ReaderKey key, char raw_char) {
         }
         if (is_ok) {
             if (g_doc.chapter_count > 0) {
-                if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
-                    g_pdf_page = (int)g_doc.chapters[g_toc_sel].offset;
-                    g_pdf_pan_x = 0; g_pdf_pan_y = 0;
-                } else {
-                    jump_to_offset(g_doc.chapters[g_toc_sel].offset);
-                }
+                if (g_doc.format == BOOK_FMT_PDF && g_pdf) { g_pdf_page = (int)g_doc.chapters[g_toc_sel].offset; g_pdf_pan_x = 0; g_pdf_pan_y = 0; }
+                else jump_to_offset(g_doc.chapters[g_toc_sel].offset);
                 save_bookmark();
             }
             g_screen = active_read_screen();
@@ -972,7 +879,6 @@ void reader_on_key(ReaderKey key, char raw_char) {
         return;
     }
 
-    /* 5. 視覺跳頁滑桿 */
     if (g_screen == SCR_JUMP) {
         int tot = (g_doc.format == BOOK_FMT_PDF && g_pdf) ? pdf_page_count(g_pdf) : g_page_count;
         if (key == RKEY_BACK || key == RKEY_JUMP) { g_screen = active_read_screen(); return; }
@@ -996,7 +902,6 @@ void reader_on_key(ReaderKey key, char raw_char) {
         return;
     }
 
-    /* 6. 真 PDF 視覺閱讀模式 (原版面渲染 + 縮放 + 平移 + 夜間反白 + 可選單頁重排) */
     if (g_screen == SCR_READ_PDF && g_pdf) {
         int tot = pdf_page_count(g_pdf);
         int vw = hal_get_width(), vh = hal_get_height() - 74;
@@ -1027,43 +932,34 @@ void reader_on_key(ReaderKey key, char raw_char) {
                 if (can_pan_y && g_pdf_pan_y < g_pdf_last_ph - vh) { g_pdf_pan_y += 90; clamp_pdf_pan(); }
                 else if (g_pdf_page + 1 < tot) { g_pdf_page++; g_pdf_pan_x = 0; g_pdf_pan_y = 0; save_bookmark(); }
                 break;
-            case RKEY_FONT_UP:
-                if (g_pdf_zoom < 4) { g_pdf_zoom++; g_pdf_pan_x = 0; g_pdf_pan_y = 0; }
-                break;
-            case RKEY_FONT_DOWN:
-                if (g_pdf_zoom > 0) { g_pdf_zoom--; g_pdf_pan_x = 0; g_pdf_pan_y = 0; }
-                break;
-            case RKEY_REFLOW:
-                g_pdf_reflow = !g_pdf_reflow;
-                break;
-            case RKEY_THEME:
-                g_theme_idx = (g_theme_idx + 1) % 4; save_library();
-                break;
-            case RKEY_TOC: open_toc_screen(); break;
-            case RKEY_JUMP: g_jump_target = g_pdf_page; g_screen = SCR_JUMP; break;
-            case RKEY_BOOKMARK: g_screen = SCR_BOOKMARKS; break;
-            case RKEY_SEARCH: g_search_ran = 0; g_screen = SCR_SEARCH; break;
-            case RKEY_OPEN: open_new_book_dialog(); break;
+            case RKEY_FONT_UP:   if (g_pdf_zoom < 4) { g_pdf_zoom++; g_pdf_pan_x = 0; g_pdf_pan_y = 0; } break;
+            case RKEY_FONT_DOWN: if (g_pdf_zoom > 0) { g_pdf_zoom--; g_pdf_pan_x = 0; g_pdf_pan_y = 0; } break;
+            case RKEY_REFLOW:    g_pdf_reflow = !g_pdf_reflow; break;
+            case RKEY_THEME:     g_theme_idx = (g_theme_idx + 1) % 4; save_library(); break;
+            case RKEY_TOC:       open_toc_screen(); break;
+            case RKEY_JUMP:      g_jump_target = g_pdf_page; g_screen = SCR_JUMP; break;
+            case RKEY_BOOKMARK:  g_screen = SCR_BOOKMARKS; break;
+            case RKEY_SEARCH:    g_search_ran = 0; g_screen = SCR_SEARCH; break;
+            case RKEY_OPEN:      open_new_book_dialog(); break;
             case RKEY_SHELF:
             case RKEY_BACKSPACE: save_bookmark(); save_manual_bookmarks(); g_screen = SCR_HOME; break;
             case RKEY_BACK:
-            case RKEY_MENU: g_read_menu_sel = 0; g_screen = SCR_READ_MENU; break;
+            case RKEY_MENU:      g_read_menu_sel = 0; g_screen = SCR_READ_MENU; break;
             default: break;
         }
         return;
     }
 
-    /* 7. BMP 圖片書模式 */
-    if (g_screen == SCR_READ_BMP) {
+    if (g_screen == SCR_READ_IMG) {
         if (key == RKEY_LEFT || key == RKEY_UP || key == RKEY_PGUP) {
             char np[384] = {0};
-            if (hal_find_sibling_bmp(g_filepath, -1, np, sizeof(np))) {
+            if (hal_find_sibling_image(g_filepath, -1, np, sizeof(np))) {
                 snprintf(g_filepath, sizeof(g_filepath), "%s", np);
                 utf8_ellipsis(get_filename_only(np), 44, g_doc.title, sizeof(g_doc.title));
             }
         } else if (key == RKEY_RIGHT || key == RKEY_DOWN || key == RKEY_PGDN || key == RKEY_SPACE) {
             char np[384] = {0};
-            if (hal_find_sibling_bmp(g_filepath, 1, np, sizeof(np))) {
+            if (hal_find_sibling_image(g_filepath, 1, np, sizeof(np))) {
                 snprintf(g_filepath, sizeof(g_filepath), "%s", np);
                 utf8_ellipsis(get_filename_only(np), 44, g_doc.title, sizeof(g_doc.title));
             }
@@ -1074,7 +970,6 @@ void reader_on_key(ReaderKey key, char raw_char) {
         return;
     }
 
-    /* 8. EPUB / TXT 閱讀模式 */
     switch (key) {
         case RKEY_LEFT:
         case RKEY_UP:
@@ -1087,23 +982,291 @@ void reader_on_key(ReaderKey key, char raw_char) {
         case RKEY_SPACE:
             if (g_current_page + 1 < g_page_count) { g_current_page++; save_bookmark(); }
             break;
-        case RKEY_TOC: open_toc_screen(); break;
-        case RKEY_JUMP: if (g_page_count > 0) { g_jump_target = g_current_page; g_screen = SCR_JUMP; } break;
-        case RKEY_BOOKMARK: g_screen = SCR_BOOKMARKS; break;
-        case RKEY_SEARCH: g_search_ran = 0; g_screen = SCR_SEARCH; break;
-        case RKEY_THEME: g_theme_idx = (g_theme_idx + 1) % 4; save_library(); break;
-        case RKEY_SPACING: g_spacing_idx = (g_spacing_idx + 1) % 3; save_library(); reader_on_resize(); break;
-        case RKEY_OPEN: open_new_book_dialog(); break;
+        case RKEY_TOC:       open_toc_screen(); break;
+        case RKEY_JUMP:      if (g_page_count > 0) { g_jump_target = g_current_page; g_screen = SCR_JUMP; } break;
+        case RKEY_BOOKMARK:  g_screen = SCR_BOOKMARKS; break;
+        case RKEY_SEARCH:    g_search_ran = 0; g_screen = SCR_SEARCH; break;
+        case RKEY_THEME:     g_theme_idx = (g_theme_idx + 1) % 4; save_library(); break;
+        case RKEY_SPACING:   g_spacing_idx = (g_spacing_idx + 1) % 3; save_library(); reader_on_resize(); break;
+        case RKEY_OPEN:      open_new_book_dialog(); break;
         case RKEY_SHELF:
         case RKEY_BACKSPACE: save_bookmark(); save_manual_bookmarks(); g_screen = SCR_HOME; break;
         case RKEY_BACK:
-        case RKEY_MENU: g_read_menu_sel = 0; g_screen = SCR_READ_MENU; break;
+        case RKEY_MENU:      g_read_menu_sel = 0; g_screen = SCR_READ_MENU; break;
         default: break;
     }
 }
 
 /* ============================================================
- * 現代化 App 畫面繪製
+ * 全畫面觸控 / 觸控筆點擊互動 (reader_on_touch)
+ * ============================================================ */
+void reader_on_touch(int tx, int ty) {
+    int w = hal_get_width(), h = hal_get_height();
+    if (tx < 0 || ty < 0 || tx >= w || ty >= h) return;
+
+    /* 1. 首頁觸控 */
+    if (g_screen == SCR_HOME) {
+        /* 左側導覽列 (x < 76) */
+        if (tx < 76) {
+            for (int i = 0; i < 4; i++) {
+                int y0 = 78 + i * 74;
+                if (ty >= y0 && ty <= y0 + 62) {
+                    if (i == 0) g_home_tab = TAB_SHELF;
+                    else if (i == 1) g_home_tab = TAB_MANAGE;
+                    else if (i == 2) g_home_tab = TAB_APPEARANCE;
+                    else open_new_book_dialog();
+                    return;
+                }
+            }
+            return;
+        }
+
+        /* 右上匯入膠囊按鈕 */
+        if (g_home_tab == TAB_SHELF && tx >= w - 190 && ty <= 48) {
+            open_new_book_dialog();
+            return;
+        }
+
+        int mx = 94, mw = w - mx - 18;
+
+        if (g_home_tab == TAB_SHELF) {
+            if (g_book_count == 0) {
+                open_new_book_dialog();
+                return;
+            }
+            /* 點上方 Hero Card -> 直接繼續閱讀第 0 本 */
+            if (ty >= 54 && ty <= 174) {
+                g_shelf_sel = 0;
+                char target[384]; snprintf(target, sizeof(target), "%s", g_books[0].path);
+                reader_open_file(target);
+                return;
+            }
+            /* 點下方 4 欄立體書封網格 */
+            int grid_y = 208, gap = 14, cols = 4;
+            int card_w = (mw - gap * (cols - 1)) / cols;
+            if (ty >= grid_y && ty <= h - 30) {
+                int start_idx = (g_book_count == 1) ? 0 : ((g_shelf_sel >= 5) ? (1 + ((g_shelf_sel - 1) / 4) * 4) : 1);
+                for (int col = 0; col < cols; col++) {
+                    int cx = mx + col * (card_w + gap);
+                    int idx = start_idx + col;
+                    if (idx < g_book_count && tx >= cx && tx <= cx + card_w) {
+                        g_shelf_sel = idx;
+                        char target[384]; snprintf(target, sizeof(target), "%s", g_books[idx].path);
+                        reader_open_file(target);
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+
+        if (g_home_tab == TAB_MANAGE) {
+            int row_h = 68, top_y = 54, visible = (h - top_y - 36) / row_h;
+            if (visible < 1) visible = 1;
+            if (ty >= top_y) {
+                int row = (ty - top_y) / row_h;
+                int idx = g_manage_scroll + row;
+                if (idx >= 0 && idx < g_book_count && row < visible) {
+                    /* 右側紅色 [刪除] 按鈕區 */
+                    if (tx >= mx + mw - 58) {
+                        remove_book_at(idx);
+                    } else {
+                        g_shelf_sel = idx;
+                        char target[384]; snprintf(target, sizeof(target), "%s", g_books[idx].path);
+                        reader_open_file(target);
+                    }
+                }
+            }
+            return;
+        }
+
+        if (g_home_tab == TAB_APPEARANCE) {
+            /* 點 4 張主題色票卡 */
+            int gap = 14, cw = (mw - gap * 3) / 4;
+            if (ty >= 80 && ty <= 232) {
+                for (int i = 0; i < 4; i++) {
+                    int cx = mx + i * (cw + gap);
+                    if (tx >= cx && tx <= cx + cw) { g_theme_idx = i; g_appear_row = 0; save_library(); return; }
+                }
+            }
+            /* 點 3 個行距按鈕 */
+            if (ty >= 274 && ty <= 316) {
+                for (int i = 0; i < 3; i++) {
+                    int px = mx + i * 140;
+                    if (tx >= px && tx <= px + 126) { g_spacing_idx = i; g_appear_row = 1; save_library(); return; }
+                }
+            }
+            return;
+        }
+        return;
+    }
+
+    /* 2. 閱讀控制面板觸控 */
+    if (g_screen == SCR_READ_MENU) {
+        int mw = 440, mh = 376, mx = (w - mw) / 2, my = (h - mh) / 2;
+        if (tx < mx || tx > mx + mw || ty < my || ty > my + mh) {
+            g_screen = active_read_screen();
+            return;
+        }
+        if (ty >= my + 52) {
+            int idx = (ty - (my + 52)) / 39;
+            if (idx >= 0 && idx < 8) {
+                g_read_menu_sel = idx;
+                /* 第 4 項支援直接點選 4 顆色票圓點 */
+                if (idx == 4 && tx >= mx + mw - 118) {
+                    int ti = (tx - (mx + mw - 112)) / 22;
+                    if (ti >= 0 && ti < 4) { g_theme_idx = ti; save_library(); return; }
+                }
+                activate_read_menu_item(idx);
+            }
+        }
+        return;
+    }
+
+    /* 3. 書籤彈窗觸控 */
+    if (g_screen == SCR_BOOKMARKS) {
+        int mw = 540, mh = 360, mx = (w - mw) / 2, my = (h - mh) / 2;
+        if (tx < mx || tx > mx + mw || ty < my || ty > my + mh) {
+            g_screen = active_read_screen();
+            return;
+        }
+        /* 右上 [+ 新增本頁] 按鈕 */
+        if (ty <= my + 46 && tx >= mx + mw - 140) {
+            add_current_manual_bookmark();
+            return;
+        }
+        if (g_bmark_count == 0) {
+            add_current_manual_bookmark();
+            return;
+        }
+        if (ty >= my + 56 && ty < my + mh - 34) {
+            int start = (g_bmark_sel >= 7) ? (g_bmark_sel - 6) : 0;
+            int row = (ty - (my + 56)) / 38;
+            int idx = start + row;
+            if (idx >= 0 && idx < g_bmark_count) {
+                if (tx >= mx + mw - 64) {
+                    for (int i = idx; i + 1 < g_bmark_count; i++) g_bmarks[i] = g_bmarks[i + 1];
+                    g_bmark_count--;
+                    if (g_bmark_sel >= g_bmark_count && g_bmark_count > 0) g_bmark_sel = g_bmark_count - 1;
+                    save_manual_bookmarks();
+                } else {
+                    g_bmark_sel = idx;
+                    reader_on_key(RKEY_OK, 0);
+                }
+            }
+        }
+        return;
+    }
+
+    /* 4. 搜尋彈窗觸控 */
+    if (g_screen == SCR_SEARCH) {
+        int mw = 580, mh = 380, mx = (w - mw) / 2, my = (h - mh) / 2;
+        if (tx < mx || tx > mx + mw || ty < my || ty > my + mh) {
+            g_screen = active_read_screen();
+            return;
+        }
+        if (g_search_ran && g_search_cnt > 0 && ty >= my + 104 && ty < my + mh - 34) {
+            int row = (ty - (my + 104)) / 38;
+            int idx = g_search_scroll + row;
+            if (idx >= 0 && idx < g_search_cnt) {
+                g_search_sel = idx;
+                reader_on_key(RKEY_OK, 0);
+            }
+        }
+        return;
+    }
+
+    /* 5. 跳頁滑桿彈窗觸控 */
+    if (g_screen == SCR_JUMP) {
+        int bw = 460, bh = 160, bx = (w - bw) / 2, by = (h - bh) / 2;
+        if (tx < bx || tx > bx + bw || ty < by || ty > by + bh) {
+            g_screen = active_read_screen();
+            return;
+        }
+        int tot = (g_doc.format == BOOK_FMT_PDF && g_pdf) ? pdf_page_count(g_pdf) : g_page_count;
+        /* 直接點擊滑桿條跳到對應百分比 */
+        if (ty >= by + 50 && ty <= by + 90 && tot > 1) {
+            int sx = bx + 24, sw = bw - 48;
+            int rel = tx - sx;
+            if (rel < 0) rel = 0;
+            if (rel > sw) rel = sw;
+            g_jump_target = (rel * (tot - 1)) / sw;
+            return;
+        }
+        /* 點下方確認按鈕 */
+        if (ty >= by + 104) {
+            if (tx < bx + bw / 2) reader_on_key(RKEY_OK, 0);
+            else g_screen = active_read_screen();
+        }
+        return;
+    }
+
+    /* 6. 目錄畫面觸控 */
+    if (g_screen == SCR_TOC) {
+        if (ty <= 44 && tx >= w - 100) { g_screen = active_read_screen(); return; }
+        if (ty >= h - 34) {
+            if (tx < w / 3) reader_on_key(RKEY_PGUP, 0);
+            else if (tx < (w * 2) / 3) reader_on_key(RKEY_PGDN, 0);
+            else g_screen = active_read_screen();
+            return;
+        }
+        int row = (ty - 56) / 38;
+        int idx = g_toc_scroll + row;
+        if (row >= 0 && idx >= 0 && idx < g_doc.chapter_count) {
+            g_toc_sel = idx;
+            reader_on_key(RKEY_OK, 0);
+        }
+        return;
+    }
+
+    /* 7. 閱讀畫面觸控 (PDF / EPUB / TXT / IMG) */
+    if (g_screen == SCR_READ_PDF || g_screen == SCR_READ_TEXT || g_screen == SCR_READ_IMG) {
+        /* 頂部列點擊 */
+        if (ty <= 36) {
+            if (tx < 86) {
+                save_bookmark(); save_manual_bookmarks(); g_screen = SCR_HOME;
+                return;
+            }
+            if (g_screen == SCR_READ_PDF) {
+                if (tx >= w - 196 && tx < w - 152) { reader_on_key(RKEY_FONT_DOWN, '-'); return; }
+                if (tx >= w - 148 && tx < w - 104) { reader_on_key(RKEY_FONT_UP, '+'); return; }
+                if (tx >= w - 100) { reader_on_key(RKEY_REFLOW, 'R'); return; }
+            }
+            if (tx >= w - 96) { g_read_menu_sel = 0; g_screen = SCR_READ_MENU; return; }
+            return;
+        }
+
+        /* 底部快捷工具列點擊 */
+        if (ty >= h - 38) {
+            if (tx >= w - 340) {
+                int slot = (tx - (w - 340)) / 68;
+                if (slot == 0) open_toc_screen();
+                else if (slot == 1) g_screen = SCR_BOOKMARKS;
+                else if (slot == 2) { g_search_ran = 0; g_screen = SCR_SEARCH; }
+                else if (slot == 3) {
+                    g_jump_target = (g_screen == SCR_READ_PDF) ? g_pdf_page : g_current_page;
+                    g_screen = SCR_JUMP;
+                } else { g_read_menu_sel = 0; g_screen = SCR_READ_MENU; }
+            } else {
+                g_read_menu_sel = 0; g_screen = SCR_READ_MENU;
+            }
+            return;
+        }
+
+        /* 中央閱讀區：左 30% 上一頁 / 右 30% 下一頁 / 中間 40% 開選單 */
+        if (tx < (w * 30) / 100) {
+            reader_on_key(RKEY_PGUP, 0);
+        } else if (tx > (w * 70) / 100) {
+            reader_on_key(RKEY_PGDN, 0);
+        } else {
+            g_read_menu_sel = 0;
+            g_screen = SCR_READ_MENU;
+        }
+    }
+}
+
+/* ============================================================
+ * 現代化 App 畫面繪製 (彈窗呼叫 hal_clear_text_in_rect 根治重疊!)
  * ============================================================ */
 static int calc_book_pct(const BookEntry *be) {
     if (be->page_count > 0) return ((be->page_idx + 1) * 100) / be->page_count;
@@ -1139,7 +1302,7 @@ static void render_left_rail(const AppTheme *th, int h) {
         char kb[4]; snprintf(kb, sizeof(kb), "%d", i + 1);
         ui_draw_ascii(rw - 16, ty + 5, kb, 1, th->muted);
     }
-    ui_draw_ascii(18, h - 24, "V4.0", 1, th->muted);
+    ui_draw_ascii(18, h - 24, "V5.0", 1, th->muted);
 }
 
 static void render_home_shelf(const AppTheme *th, int w, int h) {
@@ -1151,7 +1314,7 @@ static void render_home_shelf(const AppTheme *th, int w, int h) {
     int bx = w - 184;
     ui_fill_round_rect(bx, 12, 166, 32, 16, th->accent);
     hal_set_text_bg(th->accent);
-    draw_str(bx + 18, 19, "[O] 匯入 EPUB/PDF", 140, 0xFFFFFF);
+    draw_str(bx + 18, 19, "+ 匯入書檔 [O]", 140, 0xFFFFFF);
 
     if (g_toast_msg[0]) {
         hal_set_text_bg(th->bg);
@@ -1161,26 +1324,26 @@ static void render_home_shelf(const AppTheme *th, int w, int h) {
     if (g_book_count == 0) {
         int cw = mw - 40, ch = h - 108, cx = mx + 20, cy = 62;
         ui_card(cx, cy, cw, ch, 16, th->card_bg, th->card_border, th->shadow, 0, th->accent);
-        ui_icon_open_book(cx + cw / 2, cy + 80, th->accent, th->bg, th->card_border);
+        ui_icon_open_book(cx + cw / 2, cy + 78, th->accent, th->bg, th->card_border);
 
-        int px = cx + cw / 2 - 118;
-        ui_draw_badge(px,       cy + 128, "EPUB", ui_format_color(BOOK_FMT_EPUB), 0xFFFFFF);
-        ui_draw_badge(px + 60,  cy + 128, "PDF",  ui_format_color(BOOK_FMT_PDF),  0xFFFFFF);
-        ui_draw_badge(px + 114, cy + 128, "TXT",  ui_format_color(BOOK_FMT_TXT),  0xFFFFFF);
-        ui_draw_badge(px + 168, cy + 128, "BMP",  ui_format_color(BOOK_FMT_BMP),  0xFFFFFF);
+        int px = cx + cw / 2 - 144;
+        ui_draw_badge(px,       cy + 126, "EPUB", ui_format_color(BOOK_FMT_EPUB), 0xFFFFFF);
+        ui_draw_badge(px + 60,  cy + 126, "PDF",  ui_format_color(BOOK_FMT_PDF),  0xFFFFFF);
+        ui_draw_badge(px + 114, cy + 126, "PNG",  ui_format_color(BOOK_FMT_PNG),  0xFFFFFF);
+        ui_draw_badge(px + 168, cy + 126, "TXT",  ui_format_color(BOOK_FMT_TXT),  0xFFFFFF);
+        ui_draw_badge(px + 222, cy + 126, "BMP",  ui_format_color(BOOK_FMT_BMP),  0xFFFFFF);
 
         hal_set_text_bg(th->card_bg);
-        draw_str(cx + cw / 2 - 130, cy + 162, "真正原生閱讀 EPUB 與 PDF 原版面", 320, th->text);
-        draw_str(cx + cw / 2 - 200, cy + 192, "支援 PDF 圖片/排版縮放平移、書籤、全文搜尋、4種護眼主題", 420, th->muted);
+        draw_str(cx + cw / 2 - 140, cy + 160, "支援觸控點擊 · EPUB / PDF / PNG 原生閱讀", 360, th->text);
+        draw_str(cx + cw / 2 - 196, cy + 190, "支援 PDF 原版面圖片與縮放、多書籤、全文搜尋、4種護眼主題", 420, th->muted);
 
-        int btn_w = 240, btn_h = 42, btn_x = cx + (cw - btn_w) / 2, btn_y = cy + 242;
+        int btn_w = 246, btn_h = 42, btn_x = cx + (cw - btn_w) / 2, btn_y = cy + 240;
         ui_fill_round_rect(btn_x, btn_y, btn_w, btn_h, 21, th->accent);
         hal_set_text_bg(th->accent);
-        draw_str(btn_x + 30, btn_y + 12, "[Enter] 匯入第一本電子書", 200, 0xFFFFFF);
+        draw_str(btn_x + 28, btn_y + 12, "點擊或按 [Enter] 匯入新書", 210, 0xFFFFFF);
         return;
     }
 
-    /* 上方 Hero Card */
     BookEntry *hero = &g_books[0];
     int hero_y = 56, hero_h = 114;
     ui_card(mx, hero_y, mw, hero_h, 14, th->card_bg, th->card_border, th->shadow, (g_shelf_sel == 0), th->accent);
@@ -1201,7 +1364,7 @@ static void render_home_shelf(const AppTheme *th, int w, int h) {
 
     char pinfo[96];
     if (hero->page_count > 0) snprintf(pinfo, sizeof(pinfo), "已讀 %d%%  (第 %d / %d 頁)", hpct, hero->page_idx + 1, hero->page_count);
-    else snprintf(pinfo, sizeof(pinfo), "圖片書模式 / 準備就緒");
+    else snprintf(pinfo, sizeof(pinfo), "圖片書模式 / 點擊開啟");
     draw_str(tx, hero_y + 86, pinfo, tw, th->muted);
 
     int cta_x = mx + mw - 126, cta_y = hero_y + 39;
@@ -1211,14 +1374,12 @@ static void render_home_shelf(const AppTheme *th, int w, int h) {
     hal_set_text_bg(cta_bg);
     draw_str(cta_x + 18, cta_y + 9, "繼續閱讀", 80, cta_fg);
 
-    /* 下方 4 欄視覺書封網格 */
     hal_set_text_bg(th->bg);
-    draw_str(mx, 182, "全部書籍  (↑↓←→ 選書 · [Enter] 閱讀 · [D] 移出)", mw, th->muted);
+    draw_str(mx, 182, "全部書籍  (直接點擊書封或方向鍵選書 · [D] 移出)", mw, th->muted);
 
     int grid_y = 208, cols = 4, gap = 14;
     int card_w = (mw - gap * (cols - 1)) / cols;
-    int card_h = h - grid_y - 34;
-    if (card_h > 236) card_h = 236;
+    int card_h = h - grid_y - 34; if (card_h > 236) card_h = 236;
 
     int start_idx = (g_book_count == 1) ? 0 : ((g_shelf_sel >= 5) ? (1 + ((g_shelf_sel - 1) / 4) * 4) : 1);
     for (int col = 0; col < cols; col++) {
@@ -1247,14 +1408,14 @@ static void render_home_shelf(const AppTheme *th, int w, int h) {
     }
 
     hal_set_text_bg(th->bg);
-    draw_str(mx, h - 24, "[1]書架  [2]管理  [3]外觀主題  [4/O]匯入新書  [ESC]離開", mw, th->muted);
+    draw_str(mx, h - 24, "點擊螢幕或按鍵：[1]書架 [2]管理 [3]外觀 [4/O]匯入 [ESC]離開", mw, th->muted);
 }
 
 static void render_home_manage(const AppTheme *th, int w, int h) {
     int mx = 94, mw = w - mx - 18;
     hal_set_text_bg(th->bg);
-    draw_str(mx, 18, "書庫管理  ([Enter] 閱讀 · [D] 移出紀錄 · [O] 匯入)", mw, th->text);
-    if (g_book_count == 0) { draw_str(mx, 80, "目前沒有任何書籍紀錄，按 [O] 匯入新書。", mw, th->muted); return; }
+    draw_str(mx, 18, "書庫管理  (點擊開啟 · 點右側 [刪] 或按 [D] 移出紀錄)", mw, th->text);
+    if (g_book_count == 0) { draw_str(mx, 80, "目前沒有書籍紀錄，點擊左側 [匯入] 或按 [O] 新增。", mw, th->muted); return; }
 
     int row_h = 68, top_y = 54, visible = (h - top_y - 36) / row_h;
     if (visible < 1) visible = 1;
@@ -1268,15 +1429,18 @@ static void render_home_manage(const AppTheme *th, int w, int h) {
         ui_draw_badge(mx + 12, ry + 12, book_format_tag(be->format), ui_format_color(be->format), 0xFFFFFF);
 
         hal_set_text_bg(th->card_bg);
-        char tbuf[96]; utf8_ellipsis(be->title, (mw - 180) / 9, tbuf, sizeof(tbuf));
-        draw_str(mx + 70, ry + 10, tbuf, mw - 180, th->text);
-        char pbuf[128]; utf8_ellipsis(be->path, (mw - 100) / 9, pbuf, sizeof(pbuf));
-        draw_str(mx + 14, ry + 34, pbuf, mw - 110, th->muted);
+        char tbuf[96]; utf8_ellipsis(be->title, (mw - 210) / 9, tbuf, sizeof(tbuf));
+        draw_str(mx + 70, ry + 10, tbuf, mw - 210, th->text);
+        char pbuf[128]; utf8_ellipsis(be->path, (mw - 150) / 9, pbuf, sizeof(pbuf));
+        draw_str(mx + 14, ry + 34, pbuf, mw - 150, th->muted);
 
         int pct = calc_book_pct(be);
-        ui_progress_bar(mx + mw - 100, ry + 22, 84, 7, pct, th->track, th->accent);
-        char pc[16]; snprintf(pc, sizeof(pc), "%d%%", pct);
-        ui_draw_ascii(mx + mw - 42, ry + 36, pc, 1, th->muted);
+        ui_progress_bar(mx + mw - 144, ry + 26, 74, 7, pct, th->track, th->accent);
+
+        /* 右側可點擊刪除膠囊 */
+        ui_fill_round_rect(mx + mw - 56, ry + 14, 44, 30, 8, 0xEF4444);
+        hal_set_text_bg(0xEF4444);
+        draw_str(mx + mw - 44, ry + 20, "刪", 24, 0xFFFFFF);
     }
     hal_set_text_bg(th->bg);
     draw_str(mx, h - 24, "[1]書架  [2]管理  [3]外觀主題  [4/O]匯入新書  [ESC]離開", mw, th->muted);
@@ -1285,7 +1449,7 @@ static void render_home_manage(const AppTheme *th, int w, int h) {
 static void render_home_appearance(const AppTheme *th, int w, int h) {
     int mx = 94, mw = w - mx - 18;
     hal_set_text_bg(th->bg);
-    draw_str(mx, 18, "外觀與閱讀排版  (↑↓ 切項目 · ←→ 即時切換)", mw, th->text);
+    draw_str(mx, 18, "外觀與閱讀排版  (直接點擊色票卡片或 ←→ 即時切換)", mw, th->text);
     draw_str(mx, 54, "選擇閱讀主題配色：", mw, (g_appear_row == 0) ? th->accent : th->muted);
 
     int gap = 14, cw = (mw - gap * 3) / 4, ch = 152, cy = 80;
@@ -1322,36 +1486,63 @@ static void render_home_appearance(const AppTheme *th, int w, int h) {
     ui_card(mx, py, mw, ph, 12, th->card_bg, th->card_border, th->shadow, 0, th->accent);
     hal_set_text_bg(th->card_bg);
     int lh = FONT_H + SPACING_PX[g_spacing_idx];
-    draw_str(mx + 18, py + 14, "排版預覽：原生解析 EPUB 與真原版面 PDF，", mw - 36, th->text);
-    if (14 + lh + FONT_H < ph) draw_str(mx + 18, py + 14 + lh, "支援書籤、全文搜尋、縮放平移與 4 種現代護眼主題。", mw - 36, th->text);
+    draw_str(mx + 18, py + 14, "排版預覽：點左側翻上一頁、點右側翻下一頁、點中間開選單。", mw - 36, th->text);
+    if (14 + lh + FONT_H < ph) draw_str(mx + 18, py + 14 + lh, "支援真原版面 PDF、EPUB、PNG 圖片書與現代無重疊選單。", mw - 36, th->text);
 
     hal_set_text_bg(th->bg);
     draw_str(mx, h - 24, "[1]書架  [2]管理  [3]外觀主題  [4/O]匯入新書  [ESC]離開", mw, th->muted);
 }
 
-/* --- 真 PDF 視覺頁面繪製 (原版面紙張 + 圖片 + 向量 + 定位字，或單頁重排) --- */
+static void draw_bottom_touch_pills(const AppTheme *th, int w, int by) {
+    const char *btns[5] = { "目錄", "書籤", "搜尋", "跳頁", "選單" };
+    int start_x = w - 340;
+    for (int i = 0; i < 5; i++) {
+        int bx = start_x + i * 66;
+        uint32_t bg = (i == 4) ? th->accent : th->card_bg;
+        uint32_t fg = (i == 4) ? 0xFFFFFF : th->text;
+        ui_fill_round_rect(bx, by + 6, 58, 26, 7, bg);
+        if (i != 4) ui_draw_round_rect(bx, by + 6, 58, 26, 7, th->card_border);
+        hal_set_text_bg(bg);
+        draw_str(bx + 11, by + 10, btns[i], 42, fg);
+    }
+}
+
 static void render_pdf_base(const AppTheme *th, int w, int h) {
     int top_bar = 36, bot_bar = 38;
     int tot = pdf_page_count(g_pdf);
     int pct = (tot > 0) ? (((g_pdf_page + 1) * 100) / tot) : 0;
 
     hal_clear(th->bg);
-
-    /* 頂部 PDF 專用工具列 */
     hal_fill_rect(0, 0, w, top_bar, th->bar_bg);
     hal_fill_rect(0, top_bar, w, 1, th->card_border);
-    ui_draw_badge(14, 10, "PDF", ui_format_color(BOOK_FMT_PDF), 0xFFFFFF);
 
+    /* 左上返回書架觸控按鈕 */
+    ui_fill_round_rect(10, 6, 68, 24, 7, th->card_bg);
+    ui_draw_round_rect(10, 6, 68, 24, 7, th->card_border);
+    hal_set_text_bg(th->card_bg);
+    draw_str(18, 9, "< 書架", 56, th->text);
+
+    ui_draw_badge(86, 10, "PDF", ui_format_color(BOOK_FMT_PDF), 0xFFFFFF);
     hal_set_text_bg(th->bar_bg);
     char tbuf[72]; utf8_ellipsis(g_doc.title, 26, tbuf, sizeof(tbuf));
-    draw_str(60, 9, tbuf, 260, th->text);
+    draw_str(132, 9, tbuf, 260, th->text);
 
-    char mode_tag[96];
-    if (g_pdf_reflow) snprintf(mode_tag, sizeof(mode_tag), "單頁重排模式  ([R] 切回 PDF 原版面)");
-    else snprintf(mode_tag, sizeof(mode_tag), "原版面視圖 · 縮放:%s  ([+/-]縮放 [R]重排)", PDF_ZOOM_NAMES[g_pdf_zoom]);
-    draw_str(w - 390, 9, mode_tag, 376, th->accent);
+    /* 右上可點擊縮放 [-][+] 與 [重排/原版] 按鈕 */
+    ui_fill_round_rect(w - 196, 6, 42, 24, 7, th->card_bg);
+    ui_draw_round_rect(w - 196, 6, 42, 24, 7, th->card_border);
+    ui_draw_ascii(w - 178, 14, "-", 1, th->text);
 
-    /* 底部進度與快捷列 */
+    ui_fill_round_rect(w - 148, 6, 42, 24, 7, th->card_bg);
+    ui_draw_round_rect(w - 148, 6, 42, 24, 7, th->card_border);
+    ui_draw_ascii(w - 130, 14, "+", 1, th->text);
+
+    uint32_t rbg = g_pdf_reflow ? th->accent : th->card_bg;
+    uint32_t rfg = g_pdf_reflow ? 0xFFFFFF : th->text;
+    ui_fill_round_rect(w - 98, 6, 86, 24, 7, rbg);
+    if (!g_pdf_reflow) ui_draw_round_rect(w - 98, 6, 86, 24, 7, th->card_border);
+    hal_set_text_bg(rbg);
+    draw_str(w - 88, 9, g_pdf_reflow ? "原版視圖" : "重排檢視", 72, rfg);
+
     int by = h - bot_bar;
     hal_fill_rect(0, by, w, bot_bar, th->bar_bg);
     hal_fill_rect(0, by, w, 3, th->track);
@@ -1359,11 +1550,10 @@ static void render_pdf_base(const AppTheme *th, int w, int h) {
 
     hal_set_text_bg(th->bar_bg);
     char foot_l[96];
-    snprintf(foot_l, sizeof(foot_l), "PDF 第 %d / %d 頁 (%d%%)", g_pdf_page + 1, tot, pct);
-    draw_str(18, by + 11, foot_l, 260, th->text);
-    draw_str(w - 430, by + 11, "[PgUpDn]翻頁 [↑↓←→]平移 [K]書籤 [F]搜尋 [ESC]選單", 418, th->muted);
+    snprintf(foot_l, sizeof(foot_l), "第 %d/%d 頁 (%d%%) · %s", g_pdf_page + 1, tot, pct, PDF_ZOOM_NAMES[g_pdf_zoom]);
+    draw_str(14, by + 11, foot_l, 340, th->text);
+    draw_bottom_touch_pills(th, w, by);
 
-    /* 渲染主視區 */
     if (!g_pdf_reflow) {
         uint32_t backdrop = th->is_dark ? 0x0C0F14 : 0xDDD8CE;
         pdf_render_page(g_pdf, g_pdf_page, 0, top_bar + 1, w, h - top_bar - bot_bar - 1,
@@ -1379,7 +1569,7 @@ static void render_pdf_base(const AppTheme *th, int w, int h) {
         get_layout_params(&max_units, &lines_per_page, &line_h);
         hal_set_text_bg(th->bg);
         if (!g_pdf_reflow_text || g_pdf_reflow_len == 0) {
-            draw_str(32, top_bar + 32, "此頁為純圖片/掃描 PDF 頁面，請按 [R] 切回「PDF 原版面視圖」直接看圖片！", w - 64, th->accent);
+            draw_str(32, top_bar + 32, "此頁為圖像/掃描 PDF 頁面，請點右上 [原版視圖] 或按 [R] 查看圖片！", w - 64, th->accent);
         } else {
             size_t pos = 0; int y = top_bar + 12;
             for (int line = 0; line < lines_per_page && pos < g_pdf_reflow_len; line++) {
@@ -1395,26 +1585,28 @@ static void render_pdf_base(const AppTheme *th, int w, int h) {
 }
 
 static void render_reading_base(const AppTheme *th, int w, int h) {
-    if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
-        render_pdf_base(th, w, h);
-        return;
-    }
+    if (g_doc.format == BOOK_FMT_PDF && g_pdf) { render_pdf_base(th, w, h); return; }
 
     int top_bar = 36, bot_bar = 38;
     hal_clear(th->bg);
 
     hal_fill_rect(0, 0, w, top_bar, th->bar_bg);
     hal_fill_rect(0, top_bar, w, 1, th->card_border);
-    ui_draw_badge(14, 10, book_format_tag(g_doc.format), ui_format_color(g_doc.format), 0xFFFFFF);
 
+    ui_fill_round_rect(10, 6, 68, 24, 7, th->card_bg);
+    ui_draw_round_rect(10, 6, 68, 24, 7, th->card_border);
+    hal_set_text_bg(th->card_bg);
+    draw_str(18, 9, "< 書架", 56, th->text);
+
+    ui_draw_badge(86, 10, book_format_tag(g_doc.format), ui_format_color(g_doc.format), 0xFFFFFF);
     hal_set_text_bg(th->bar_bg);
-    char tbuf[80]; utf8_ellipsis(g_doc.title[0] ? g_doc.title : get_filename_only(g_filepath), 30, tbuf, sizeof(tbuf));
-    draw_str(68, 9, tbuf, 300, th->text);
+    char tbuf[80]; utf8_ellipsis(g_doc.title[0] ? g_doc.title : get_filename_only(g_filepath), 28, tbuf, sizeof(tbuf));
+    draw_str(140, 9, tbuf, 280, th->text);
 
     const char *ch_name = get_current_chapter_name();
     if (ch_name && ch_name[0]) {
-        char cbuf[64]; utf8_ellipsis(ch_name, 26, cbuf, sizeof(cbuf));
-        draw_str(w - 260, 9, cbuf, 246, th->muted);
+        char cbuf[64]; utf8_ellipsis(ch_name, 24, cbuf, sizeof(cbuf));
+        draw_str(w - 250, 9, cbuf, 236, th->muted);
     }
 
     int by = h - bot_bar;
@@ -1425,14 +1617,14 @@ static void render_reading_base(const AppTheme *th, int w, int h) {
 
     hal_set_text_bg(th->bar_bg);
     char foot_l[96];
-    if (g_doc.format == BOOK_FMT_BMP) snprintf(foot_l, sizeof(foot_l), "圖片書 · [←→] 自動翻上下張");
+    if (is_image_fmt(g_doc.format)) snprintf(foot_l, sizeof(foot_l), "圖片書 · 點左右翻上下張");
     else if (g_page_count > 0) snprintf(foot_l, sizeof(foot_l), "第 %d / %d 頁 (%d%%)", g_current_page + 1, g_page_count, pct);
     else snprintf(foot_l, sizeof(foot_l), "準備就緒");
-    draw_str(18, by + 11, foot_l, 260, th->text);
-    draw_str(w - 430, by + 11, "[C]目錄  [K]書籤  [F]搜尋  [G]跳頁  [T]主題  [ESC]選單", 418, th->muted);
+    draw_str(14, by + 11, foot_l, 320, th->text);
+    draw_bottom_touch_pills(th, w, by);
 
-    if (g_doc.format == BOOK_FMT_BMP) {
-        hal_draw_bmp_file(g_filepath, 0, top_bar + 1, w, h - top_bar - bot_bar - 1);
+    if (is_image_fmt(g_doc.format)) {
+        hal_draw_image_file(g_filepath, 0, top_bar + 1, w, h - top_bar - bot_bar - 1);
         return;
     }
 
@@ -1453,14 +1645,22 @@ static void render_reading_base(const AppTheme *th, int w, int h) {
     }
 }
 
+/* 彈窗前必呼叫：清除重疊區底層文字 + 75% 柔暗背景，100% 根治文字穿透重疊！ */
+static void begin_modal_backdrop(int w, int h, int mx, int my, int mw, int mh) {
+    hal_clear_text_in_rect(mx - 8, my - 6, mw + 16, mh + 12);
+    hal_dim_rect(0, 0, w, h);
+}
+
 static void render_read_menu_overlay(const AppTheme *th, int w, int h) {
     int mw = 440, mh = 376, mx = (w - mw) / 2, my = (h - mh) / 2;
+    begin_modal_backdrop(w, h, mx, my, mw, mh);
+
     ui_card(mx, my, mw, mh, 14, th->card_bg, th->card_border, th->shadow, 1, th->accent);
     ui_fill_round_rect(mx + 2, my + 2, mw - 4, 42, 12, th->bar_bg);
     hal_fill_rect(mx + 2, my + 42, mw - 4, 1, th->card_border);
 
     hal_set_text_bg(th->bar_bg);
-    draw_str(mx + 20, my + 12, "閱讀控制面板  (←→ 可調主題與縮放/行距)", mw - 40, th->text);
+    draw_str(mx + 20, my + 12, "閱讀控制面板  (點項目或點外面關閉)", mw - 40, th->text);
 
     char items[8][64];
     snprintf(items[0], sizeof(items[0]), "繼續閱讀  (ESC)");
@@ -1468,11 +1668,10 @@ static void render_read_menu_overlay(const AppTheme *th, int w, int h) {
     snprintf(items[2], sizeof(items[2]), "書籤管理  (已存 %d 筆 · [K])", g_bmark_count);
     snprintf(items[3], sizeof(items[3]), "全文關鍵字搜尋  ([F])");
     snprintf(items[4], sizeof(items[4]), "主題配色：%s", th->name);
-    if (g_doc.format == BOOK_FMT_PDF && g_pdf) {
+    if (g_doc.format == BOOK_FMT_PDF && g_pdf)
         snprintf(items[5], sizeof(items[5]), "PDF 縮放比例：%s", PDF_ZOOM_NAMES[g_pdf_zoom]);
-    } else {
+    else
         snprintf(items[5], sizeof(items[5]), "正文行距：%s", SPACING_NAMES[g_spacing_idx]);
-    }
     snprintf(items[6], sizeof(items[6]), "快速跳頁滑桿  ([G])");
     snprintf(items[7], sizeof(items[7]), "存檔並返回現代書架");
 
@@ -1497,61 +1696,69 @@ static void render_read_menu_overlay(const AppTheme *th, int w, int h) {
 
 static void render_bookmarks_overlay(const AppTheme *th, int w, int h) {
     int mw = 540, mh = 360, mx = (w - mw) / 2, my = (h - mh) / 2;
+    begin_modal_backdrop(w, h, mx, my, mw, mh);
+
     ui_card(mx, my, mw, mh, 14, th->card_bg, th->card_border, th->shadow, 1, th->accent);
     ui_fill_round_rect(mx + 2, my + 2, mw - 4, 44, 12, th->bar_bg);
     hal_fill_rect(mx + 2, my + 44, mw - 4, 1, th->card_border);
 
     hal_set_text_bg(th->bar_bg);
-    char hdr[96]; snprintf(hdr, sizeof(hdr), "我的書籤 (%d / %d)  ·  [空白鍵/+] 新增本頁書籤", g_bmark_count, MAX_BOOKMARKS);
-    draw_str(mx + 18, my + 13, hdr, mw - 36, th->text);
+    char hdr[96]; snprintf(hdr, sizeof(hdr), "我的書籤 (%d / %d)", g_bmark_count, MAX_BOOKMARKS);
+    draw_str(mx + 18, my + 13, hdr, 240, th->text);
+
+    ui_fill_round_rect(mx + mw - 132, my + 8, 118, 28, 14, th->accent);
+    hal_set_text_bg(th->accent);
+    draw_str(mx + mw - 120, my + 13, "+ 新增本頁", 96, 0xFFFFFF);
 
     if (g_bmark_count == 0) {
         hal_set_text_bg(th->card_bg);
         draw_str(mx + 32, my + 110, "這本書還沒有手動書籤。", mw - 64, th->text);
-        draw_str(mx + 32, my + 144, "按 [Enter] 或 [空白鍵] 立即把目前這頁加入書籤！", mw - 64, th->accent);
+        draw_str(mx + 32, my + 144, "點擊右上 [+ 新增本頁] 或按 [空白鍵] 加入目前這頁！", mw - 64, th->accent);
     } else {
-        int row_h = 38;
-        int start = (g_bmark_sel >= 7) ? (g_bmark_sel - 6) : 0;
+        int row_h = 38, start = (g_bmark_sel >= 7) ? (g_bmark_sel - 6) : 0;
         for (int i = start; i < g_bmark_count && i < start + 7; i++) {
             int ry = my + 56 + (i - start) * row_h;
             int is_sel = (i == g_bmark_sel);
             uint32_t rbg = is_sel ? th->accent : th->bg;
             uint32_t rfg = is_sel ? 0xFFFFFF : th->text;
-            ui_fill_round_rect(mx + 16, ry, mw - 32, 32, 8, rbg);
+            ui_fill_round_rect(mx + 16, ry, mw - 78, 32, 8, rbg);
             hal_set_text_bg(rbg);
             char line[128];
-            snprintf(line, sizeof(line), "第%d頁 (%d%%)  %s", g_bmarks[i].page_num, g_bmarks[i].pct, g_bmarks[i].label);
-            draw_str(mx + 28, ry + 7, line, mw - 56, rfg);
+            snprintf(line, sizeof(line), "P.%d (%d%%)  %s", g_bmarks[i].page_num, g_bmarks[i].pct, g_bmarks[i].label);
+            draw_str(mx + 26, ry + 7, line, mw - 98, rfg);
+
+            ui_fill_round_rect(mx + mw - 56, ry + 2, 40, 28, 7, 0xEF4444);
+            hal_set_text_bg(0xEF4444);
+            draw_str(mx + mw - 45, ry + 7, "刪", 24, 0xFFFFFF);
         }
     }
-
     hal_set_text_bg(th->card_bg);
-    draw_str(mx + 18, my + mh - 28, "[Enter]跳至書籤  [空白/+]新增本頁  [D]刪除  [ESC]返回", mw - 36, th->muted);
+    draw_str(mx + 18, my + mh - 28, "點擊跳至書籤 · 點 [刪] 移除 · 點外部或按 [ESC] 關閉", mw - 36, th->muted);
 }
 
 static void render_search_overlay(const AppTheme *th, int w, int h) {
     int mw = 580, mh = 380, mx = (w - mw) / 2, my = (h - mh) / 2;
+    begin_modal_backdrop(w, h, mx, my, mw, mh);
+
     ui_card(mx, my, mw, mh, 14, th->card_bg, th->card_border, th->shadow, 1, th->accent);
     ui_fill_round_rect(mx + 2, my + 2, mw - 4, 44, 12, th->bar_bg);
     hal_fill_rect(mx + 2, my + 44, mw - 4, 1, th->card_border);
 
     hal_set_text_bg(th->bar_bg);
-    draw_str(mx + 18, my + 13, "全文關鍵字搜尋  (直接鍵盤打字 + Enter 搜尋 · ESC 返回)", mw - 36, th->text);
+    draw_str(mx + 18, my + 13, "全文關鍵字搜尋  (打字 + Enter 搜尋 · 點結果跳轉)", mw - 36, th->text);
 
-    /* 現代圓角搜尋輸入框 */
     ui_fill_round_rect(mx + 18, my + 56, mw - 36, 36, 10, th->bg);
     ui_draw_round_rect(mx + 18, my + 56, mw - 36, 36, 10, th->accent);
     hal_set_text_bg(th->bg);
     char qdisp[96];
     if (g_search_query[0]) snprintf(qdisp, sizeof(qdisp), "搜尋：%s_", g_search_query);
-    else snprintf(qdisp, sizeof(qdisp), "請直接輸入英文/數字，或按 [1]第一章 [2]序章 [3]結論 [4]重點");
+    else snprintf(qdisp, sizeof(qdisp), "輸入關鍵字，或按 [1]第一章 [2]序章 [3]結論 [4]重點");
     draw_str(mx + 30, my + 65, qdisp, mw - 60, g_search_query[0] ? th->text : th->muted);
 
-    /* 搜尋結果清單 */
     int list_y = my + 104;
     if (!g_search_ran) {
         hal_set_text_bg(th->card_bg);
-        draw_str(mx + 26, list_y + 20, "輸入關鍵字後按 [Enter] 開始全文檢索（支援 EPUB / PDF / TXT）。", mw - 52, th->muted);
+        draw_str(mx + 26, list_y + 20, "輸入關鍵字後按 [Enter] 開始檢索（支援 EPUB / PDF / TXT）。", mw - 52, th->muted);
     } else if (g_search_cnt == 0) {
         hal_set_text_bg(th->card_bg);
         draw_str(mx + 26, list_y + 20, "找不到符合的內容，請按 [Backspace] 清除後重試。", mw - 52, 0xEF4444);
@@ -1567,16 +1774,15 @@ static void render_search_overlay(const AppTheme *th, int w, int h) {
             uint32_t rfg = is_sel ? 0xFFFFFF : th->text;
             ui_fill_round_rect(mx + 18, ry, mw - 36, 32, 8, rbg);
             hal_set_text_bg(rbg);
-            char line[128];
-            snprintf(line, sizeof(line), "[P.%d]  %s", g_search_hits[i].page_num, g_search_hits[i].snippet);
+            char line[128]; snprintf(line, sizeof(line), "[P.%d]  %s", g_search_hits[i].page_num, g_search_hits[i].snippet);
             draw_str(mx + 28, ry + 7, line, mw - 56, rfg);
         }
     }
 
     hal_set_text_bg(th->card_bg);
     char foot[96];
-    if (g_search_ran) snprintf(foot, sizeof(foot), "共找到 %d 筆結果 · [↑↓]選擇  [Enter]立即跳轉  [Backspace]刪字", g_search_cnt);
-    else snprintf(foot, sizeof(foot), "[Enter]開始搜尋  [Backspace]刪字  [ESC]關閉");
+    if (g_search_ran) snprintf(foot, sizeof(foot), "共找到 %d 筆結果 · 點選項目或按 [Enter] 立即跳轉", g_search_cnt);
+    else snprintf(foot, sizeof(foot), "[Enter]開始搜尋  [Backspace]刪字  點外部或[ESC]關閉");
     draw_str(mx + 18, my + mh - 28, foot, mw - 36, th->muted);
 }
 
@@ -1587,16 +1793,21 @@ static void render_toc_page(const AppTheme *th, int w, int h) {
     hal_fill_rect(0, top_bar, w, 1, th->card_border);
     hal_set_text_bg(th->bar_bg);
     char hdr[128]; snprintf(hdr, sizeof(hdr), "目錄  ·  %s  (共 %d 項)", g_doc.title, g_doc.chapter_count);
-    draw_str(22, 12, hdr, w - 44, th->text);
+    draw_str(22, 12, hdr, w - 130, th->text);
+
+    ui_fill_round_rect(w - 92, 8, 76, 28, 8, th->card_bg);
+    ui_draw_round_rect(w - 92, 8, 76, 28, 8, th->card_border);
+    hal_set_text_bg(th->card_bg);
+    draw_str(w - 76, 13, "返回", 50, th->text);
 
     hal_fill_rect(0, h - bot_bar, w, bot_bar, th->bar_bg);
     hal_set_text_bg(th->bar_bg);
-    draw_str(22, h - bot_bar + 8, "[↑↓] 選擇   [PgUp/PgDn] 快捲   [Enter] 跳轉   [ESC] 返回", w - 44, th->muted);
+    draw_str(22, h - bot_bar + 8, "點項目跳轉 · 點底部：[左]上捲  [中]下捲  [右]返回閱讀", w - 44, th->muted);
 
     if (g_doc.chapter_count == 0) {
         ui_card(80, 110, w - 160, 140, 14, th->card_bg, th->card_border, th->shadow, 0, th->accent);
         hal_set_text_bg(th->card_bg);
-        draw_str(110, 148, "本書未偵測到章節標題，請按 [G] 使用跳頁滑桿。", w - 220, th->text);
+        draw_str(110, 148, "本書未偵測到章節標題，請用 [跳頁] 滑桿。", w - 220, th->text);
         return;
     }
 
@@ -1621,7 +1832,9 @@ static void render_toc_page(const AppTheme *th, int w, int h) {
 
 static void render_jump_overlay(const AppTheme *th, int w, int h) {
     int tot = (g_doc.format == BOOK_FMT_PDF && g_pdf) ? pdf_page_count(g_pdf) : g_page_count;
-    int bw = 460, bh = 152, bx = (w - bw) / 2, by = (h - bh) / 2;
+    int bw = 460, bh = 160, bx = (w - bw) / 2, by = (h - bh) / 2;
+    begin_modal_backdrop(w, h, bx, by, bw, bh);
+
     ui_card(bx, by, bw, bh, 14, th->card_bg, th->card_border, th->shadow, 1, th->accent);
     hal_set_text_bg(th->card_bg);
 
@@ -1635,8 +1848,15 @@ static void render_jump_overlay(const AppTheme *th, int w, int h) {
     hal_fill_circle(kx, sy + 5, 10, th->accent);
     hal_fill_circle(kx, sy + 5, 5, 0xFFFFFF);
 
-    draw_str(bx + 24, by + 98, "[←→] ±10頁   [↑↓] ±50頁   [PgUp/Dn] ±1頁", bw - 48, th->muted);
-    draw_str(bx + 24, by + 122, "[Enter] 確認跳轉   [ESC] 取消", bw - 48, th->accent);
+    /* 可點擊確認與取消按鈕 */
+    ui_fill_round_rect(bx + 24, by + 106, 196, 36, 10, th->accent);
+    hal_set_text_bg(th->accent);
+    draw_str(bx + 76, by + 115, "確認跳轉", 100, 0xFFFFFF);
+
+    ui_fill_round_rect(bx + 240, by + 106, 196, 36, 10, th->bar_bg);
+    ui_draw_round_rect(bx + 240, by + 106, 196, 36, 10, th->card_border);
+    hal_set_text_bg(th->bar_bg);
+    draw_str(bx + 314, by + 115, "取消", 60, th->text);
 }
 
 void reader_render(void) {

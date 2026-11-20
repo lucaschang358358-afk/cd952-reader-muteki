@@ -133,7 +133,8 @@ typedef struct {
     uint16_t qtab[4][64];
     JpgHuff huff_dc[4];
     JpgHuff huff_ac[4];
-    JpgComp comp[3];
+    JpgComp comp[4];
+    int adobe_transform;
 } JpgCtx;
 
 static void build_jpg_huff(JpgHuff *h) {
@@ -284,7 +285,7 @@ uint8_t *tiny_jpeg_decode(const uint8_t *data, size_t len, int *out_w, int *out_
             j->width  = ((int)mp[3] << 8) | mp[4];
             j->ncomp  = mp[5];
             if (j->width <= 0 || j->height <= 0 || j->width > 4096 || j->height > 4096) break;
-            if (j->ncomp != 1 && j->ncomp != 3) break;
+            if (j->ncomp != 1 && j->ncomp != 3 && j->ncomp != 4) break;
             if (pay < (size_t)(6 + j->ncomp * 3)) break;
             j->max_hs = 1; j->max_vs = 1;
             for (int i = 0; i < j->ncomp; i++) {
@@ -318,6 +319,8 @@ uint8_t *tiny_jpeg_decode(const uint8_t *data, size_t len, int *out_w, int *out_
                 o += (size_t)sum;
                 build_jpg_huff(h);
             }
+        } else if (marker == 0xEE) {
+            if (pay >= 12 && memcmp(mp, "Adobe", 5) == 0) j->adobe_transform = mp[11];
         } else if (marker == 0xDD) {
             /* DRI */
             if (pay >= 2) j->restart_interval = ((int)mp[0] << 8) | mp[1];
@@ -357,6 +360,7 @@ uint8_t *tiny_jpeg_decode(const uint8_t *data, size_t len, int *out_w, int *out_
     uint8_t y_buf[16 * 16];
     uint8_t cb_buf[16 * 16];
     uint8_t cr_buf[16 * 16];
+    uint8_t k_buf[16 * 16];
     int mcu_cnt = 0;
 
     for (int my = 0; my < mcus_y && !j->err; my++) {
@@ -385,6 +389,51 @@ uint8_t *tiny_jpeg_decode(const uint8_t *data, size_t len, int *out_w, int *out_
                         uint8_t v = y_buf[py * 8 + px];
                         uint8_t *dst = rgb + ((size_t)gy * (size_t)j->width + (size_t)gx) * 3u;
                         dst[0] = v; dst[1] = v; dst[2] = v;
+                    }
+                }
+            } else if (j->ncomp == 4) {
+                int s0 = j->comp[0].hs * 8, s1 = j->comp[1].hs * 8, s2 = j->comp[2].hs * 8, s3 = j->comp[3].hs * 8;
+                for (int v = 0; v < j->comp[0].vs; v++)
+                    for (int h = 0; h < j->comp[0].hs; h++)
+                        decode_block(j, &j->comp[0], y_buf + (v * 8) * s0 + h * 8, s0);
+                for (int v = 0; v < j->comp[1].vs; v++)
+                    for (int h = 0; h < j->comp[1].hs; h++)
+                        decode_block(j, &j->comp[1], cb_buf + (v * 8) * s1 + h * 8, s1);
+                for (int v = 0; v < j->comp[2].vs; v++)
+                    for (int h = 0; h < j->comp[2].hs; h++)
+                        decode_block(j, &j->comp[2], cr_buf + (v * 8) * s2 + h * 8, s2);
+                for (int v = 0; v < j->comp[3].vs; v++)
+                    for (int h = 0; h < j->comp[3].hs; h++)
+                        decode_block(j, &j->comp[3], k_buf + (v * 8) * s3 + h * 8, s3);
+
+                int sx0 = j->max_hs / j->comp[0].hs, sy0 = j->max_vs / j->comp[0].vs;
+                int sx1 = j->max_hs / j->comp[1].hs, sy1 = j->max_vs / j->comp[1].vs;
+                int sx2 = j->max_hs / j->comp[2].hs, sy2 = j->max_vs / j->comp[2].vs;
+                int sx3 = j->max_hs / j->comp[3].hs, sy3 = j->max_vs / j->comp[3].vs;
+                for (int py = 0; py < mcu_h; py++) {
+                    int gy = my * mcu_h + py;
+                    if (gy >= j->height) break;
+                    uint8_t *row_dst = rgb + ((size_t)gy * (size_t)j->width + (size_t)(mx * mcu_w)) * 3u;
+                    for (int px = 0; px < mcu_w; px++) {
+                        int gx = mx * mcu_w + px;
+                        if (gx >= j->width) break;
+                        int c0 = y_buf[(py / sy0) * s0 + (px / sx0)];
+                        int c1 = cb_buf[(py / sy1) * s1 + (px / sx1)];
+                        int c2 = cr_buf[(py / sy2) * s2 + (px / sx2)];
+                        int K  = k_buf[(py / sy3) * s3 + (px / sx3)];
+                        int C, M, Y;
+                        if (j->adobe_transform == 2) {
+                            int Yy = c0, Cb = c1 - 128, Cr = c2 - 128;
+                            C = 255 - clamp8(Yy + ((359 * Cr + 128) >> 8));
+                            M = 255 - clamp8(Yy - ((88 * Cb + 183 * Cr + 128) >> 8));
+                            Y = 255 - clamp8(Yy + ((454 * Cb + 128) >> 8));
+                        } else {
+                            C = 255 - c0; M = 255 - c1; Y = 255 - c2;
+                        }
+                        row_dst[0] = (uint8_t)(((255 - C) * K) / 255);
+                        row_dst[1] = (uint8_t)(((255 - M) * K) / 255);
+                        row_dst[2] = (uint8_t)(((255 - Y) * K) / 255);
+                        row_dst += 3;
                     }
                 }
             } else {

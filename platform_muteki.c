@@ -1,8 +1,9 @@
 /*
- * 無敵 CD-952 (Besta RTOS / Project Muteki) 現代化雙緩衝閱讀器平台 v4
- * - RAM 像素雙緩衝 + ARM9 展開式高速填滿 + 單次 memcpy 刷屏 (零閃爍、不卡頓)
- * - 支援真 PDF 圖片高速縮放貼圖 (hal_blit_rgb888_scaled)
- * - 支援實體鍵盤直接打字搜尋、原生開檔選擇器 (*.epub / *.pdf / *.txt / *.bmp)
+ * 無敵 CD-952 (Besta RTOS / Project Muteki) 現代化觸控雙緩衝閱讀器平台 v5
+ * - RAM 像素雙緩衝 + 展開式高速填滿 + 單次 memcpy 刷屏 (零閃爍、不卡頓)
+ * - 彈窗防文字重疊引擎 (hal_clear_text_in_rect + hal_dim_rect)
+ * - 原生 PNG + BMP 圖片書解碼與自動連頁切換
+ * - 自動適配 Muteki SDK 觸控 / 觸控筆點擊事件 (muteki_touch_adapt.h)
  */
 
 #include <ctype.h>
@@ -74,7 +75,9 @@
 #include <muteki/filepicker.h>
 #endif
 
+#include "muteki_touch_adapt.h"
 #include "hal.h"
+#include "png_tiny.h"
 #include "reader_core.h"
 
 #define MAX_TEXT_QUEUE 220
@@ -105,6 +108,10 @@ static inline uint16_t rgb888_to_rgb565(uint32_t rgb) {
     uint16_t g = (uint16_t)((rgb >> 8) & 0xFF);
     uint16_t b = (uint16_t)(rgb & 0xFF);
     return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+}
+
+static inline uint32_t dim75_rgb(uint32_t rgb) {
+    return (((rgb & 0xFEFEFEu) >> 1) + ((rgb & 0xFCFCFCu) >> 2)) & 0xFFFFFFu;
 }
 
 static size_t utf8_to_utf16(const char *src, int src_len, UTF16 *dst, size_t max_dst) {
@@ -241,7 +248,6 @@ void hal_draw_line(int x0, int y0, int x1, int y1, uint32_t rgb) {
     }
 }
 
-/* 零除法 DDA 高速縮放貼圖 (供 PDF 內嵌 JPEG / Flate 圖片直接繪製於頁面上!) */
 void hal_blit_rgb888_scaled(const uint8_t *rgb, int img_w, int img_h,
                             int dst_x, int dst_y, int dst_w, int dst_h,
                             int clip_x, int clip_y, int clip_w, int clip_h,
@@ -314,6 +320,93 @@ void hal_draw_line_utf8(int x, int y, const char *utf8_text, int byte_len, int m
     tc->text[cp] = '\0';
 }
 
+/* 依像素寬度安全截斷 UTF-8，確保底層書本文字絕對不會穿透進入彈窗！ */
+static void truncate_utf8_to_px(char *s, int max_px) {
+    int max_u = max_px / 9;
+    size_t slen = strlen(s), pos = 0;
+    int units = 0;
+    while (pos < slen) {
+        unsigned char c = (unsigned char)s[pos];
+        int clen = 1, u = 1;
+        if ((c & 0x80) == 0) { clen = 1; u = 1; }
+        else if ((c & 0xE0) == 0xC0 && pos + 1 < slen) { clen = 2; u = 2; }
+        else if ((c & 0xF0) == 0xE0 && pos + 2 < slen) { clen = 3; u = 2; }
+        else if ((c & 0xF8) == 0xF0 && pos + 3 < slen) { clen = 4; u = 2; }
+        if (units + u > max_u) break;
+        pos += (size_t)clen;
+        units += u;
+    }
+    s[pos] = '\0';
+}
+
+void hal_clear_text_in_rect(int rx, int ry, int rw, int rh) {
+    int out = 0;
+    for (int i = 0; i < g_text_q_len; i++) {
+        TextCmd *tc = &g_text_q[i];
+        int y_overlap = (tc->y + 20 > ry) && (tc->y < ry + rh);
+        if (!y_overlap) {
+            if (out != i) g_text_q[out] = *tc;
+            out++;
+            continue;
+        }
+        if (tc->x >= rx + rw) {
+            if (out != i) g_text_q[out] = *tc;
+            out++;
+            continue;
+        }
+        if (tc->x < rx) {
+            int avail = (rx - 4) - tc->x;
+            if (avail >= 24) {
+                truncate_utf8_to_px(tc->text, avail);
+                if (tc->text[0] != '\0') {
+                    if (tc->max_w > avail) tc->max_w = avail;
+                    if (out != i) g_text_q[out] = *tc;
+                    out++;
+                }
+            }
+        }
+        /* 若 tc->x 落在 [rx, rx + rw)，直接丟棄不保留 */
+    }
+    g_text_q_len = out;
+}
+
+void hal_dim_rect(int rx, int ry, int rw, int rh) {
+    if (!g_backbuf || rw <= 0 || rh <= 0) return;
+    int x0 = rx < 0 ? 0 : rx, y0 = ry < 0 ? 0 : ry;
+    int x1 = (rx + rw > g_w) ? g_w : (rx + rw);
+    int y1 = (ry + rh > g_h) ? g_h : (ry + rh);
+    if (x0 >= x1 || y0 >= y1) return;
+
+    if (g_is_xrgb) {
+        uint32_t *fb = (uint32_t *)g_backbuf;
+        for (int py = y0; py < y1; py++) {
+            uint32_t *row = fb + py * g_w + x0;
+            for (int n = x1 - x0; n > 0; n--) {
+                uint32_t c = *row;
+                *row++ = ((c & 0xFEFEFEu) >> 1) + ((c & 0xFCFCFCu) >> 2);
+            }
+        }
+    } else {
+        uint16_t *fb = (uint16_t *)g_backbuf;
+        for (int py = y0; py < y1; py++) {
+            uint16_t *row = fb + py * g_w + x0;
+            for (int n = x1 - x0; n > 0; n--) {
+                uint16_t c = *row;
+                uint16_t r = (uint16_t)((((c >> 11) & 31) * 3) >> 2);
+                uint16_t g = (uint16_t)((((c >> 5)  & 63) * 3) >> 2);
+                uint16_t b = (uint16_t)(((c & 31) * 3) >> 2);
+                *row++ = (uint16_t)((r << 11) | (g << 5) | b);
+            }
+        }
+    }
+
+    /* 同步壓暗仍在佇列中的底層背景文字前景色與底色，讓視覺渾然一體 */
+    for (int i = 0; i < g_text_q_len; i++) {
+        g_text_q[i].fg = dim75_rgb(g_text_q[i].fg);
+        g_text_q[i].bg = dim75_rgb(g_text_q[i].bg);
+    }
+}
+
 void hal_present(void) {
     if (!g_lcd || !g_lcd->surface || !g_lcd->surface->buffer || !g_backbuf) return;
     memcpy(g_lcd->surface->buffer, g_backbuf, g_fb_bytes);
@@ -336,9 +429,39 @@ void hal_present(void) {
     }
 }
 
-int hal_draw_bmp_file(const char *filepath, int x, int y, int w, int h) {
+/* 同時支援 24-bit BMP 與原生 PNG (RAM 解碼，不存任何暫存檔) */
+int hal_draw_image_file(const char *filepath, int x, int y, int w, int h) {
     FILE *f = fopen(filepath, "rb");
     if (!f) return 0;
+
+    uint8_t sig[8] = {0};
+    if (fread(sig, 1, 8, f) != 8) { fclose(f); return 0; }
+    fseek(f, 0, SEEK_END);
+    long fsz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    /* 1. PNG 圖片 */
+    static const uint8_t PNG_SIG[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+    if (memcmp(sig, PNG_SIG, 8) == 0 && fsz > 32 && fsz < 12 * 1024 * 1024) {
+        uint8_t *raw = (uint8_t *)malloc((size_t)fsz);
+        if (!raw) { fclose(f); return 0; }
+        size_t got = fread(raw, 1, (size_t)fsz, f);
+        fclose(f);
+        int iw = 0, ih = 0;
+        uint8_t *rgb = tiny_png_decode(raw, got, &iw, &ih);
+        free(raw);
+        if (!rgb || iw <= 0 || ih <= 0) { free(rgb); return 0; }
+
+        int dw = w, dh = h;
+        if (iw * h > w * ih) dh = (w * ih) / iw;
+        else dw = (h * iw) / ih;
+        int dx = x + (w - dw) / 2, dy = y + (h - dh) / 2;
+        hal_blit_rgb888_scaled(rgb, iw, ih, dx, dy, dw, dh, x, y, w, h, 0);
+        free(rgb);
+        return 1;
+    }
+
+    /* 2. 24-bit BMP 圖片 */
     uint8_t hdr[54];
     if (fread(hdr, 1, 54, f) != 54 || hdr[0] != 'B' || hdr[1] != 'M') { fclose(f); return 0; }
 
@@ -373,7 +496,7 @@ int hal_draw_bmp_file(const char *filepath, int x, int y, int w, int h) {
     return 1;
 }
 
-const char *hal_get_library_path(void) { return "C:\\cd952_books_v4.idx"; }
+const char *hal_get_library_path(void) { return "C:\\cd952_books_v5.idx"; }
 
 int hal_open_file_dialog(char *out_path, int max_len) {
     UTF16 utf16path[FILEPICKER_CONTEXT_OUTPUT_MAX_LFN] = {0};
@@ -385,11 +508,11 @@ int hal_open_file_dialog(char *out_path, int max_len) {
     ctx.ctx_size = sizeof(ctx);
     ctx.path_max_cu = FILEPICKER_CONTEXT_OUTPUT_MAX_LFN;
     ctx.type_list = (
-        "All E-Books (*.epub, *.pdf, *.txt, *.bmp)\0*.epub|*.pdf|*.txt|*.bmp\0"
+        "All E-Books (*.epub, *.pdf, *.png, *.txt, *.bmp)\0*.epub|*.pdf|*.png|*.txt|*.bmp\0"
         "PDF Documents (*.pdf)\0*.pdf\0"
         "EPUB Books (*.epub)\0*.epub\0"
+        "PNG / BMP Images (*.png, *.bmp)\0*.png|*.bmp\0"
         "Text Files (*.txt)\0*.txt\0"
-        "BMP Image Books (*.bmp)\0*.bmp\0"
         "All Files (*.*)\0*.*\0"
         "\0\0\0"
     );
@@ -400,11 +523,10 @@ int hal_open_file_dialog(char *out_path, int max_len) {
         return 0;
     }
     free(ctx_out);
-
     return (utf16_to_utf8(utf16path, out_path, (size_t)max_len) > 0) ? 1 : 0;
 }
 
-int hal_find_sibling_bmp(const char *current_path, int delta, char *out_path, int max_len) {
+int hal_find_sibling_image(const char *current_path, int delta, char *out_path, int max_len) {
     if (!current_path || !out_path || max_len < 16) return 0;
     const char *dot = strrchr(current_path, '.');
     if (!dot) return 0;
@@ -484,17 +606,33 @@ int main(void) {
     reader_render();
 
     ui_event_t uievent = {0};
+    int touch_cooldown = 0;
+
     while (g_running) {
-        if (TestKeyEvent(&uievent) && GetEvent(&uievent)) {
+        if (touch_cooldown > 0) touch_cooldown--;
+
+        if ((TestKeyEvent(&uievent) || MUTEKI_TEST_TOUCH(&uievent)) && GetEvent(&uievent)) {
+            int handled = 0;
             if (uievent.event_type == UI_EVENT_TYPE_KEY) {
                 char ch = 0;
                 ReaderKey k = map_key(uievent.key_code0, &ch);
                 if (k != RKEY_NONE) {
                     reader_on_key(k, ch);
-                    if (g_running) reader_render();
+                    handled = 1;
+                }
+            } else if (MUTEKI_HAS_TOUCH && MUTEKI_IS_TOUCH_DOWN(uievent)) {
+                if (touch_cooldown == 0) {
+                    int tx = MUTEKI_TOUCH_X(uievent);
+                    int ty = MUTEKI_TOUCH_Y(uievent);
+                    if (tx >= 0 && ty >= 0 && tx < g_w && ty < g_h) {
+                        reader_on_touch(tx, ty);
+                        touch_cooldown = 5; /* 防連點 ~125ms */
+                        handled = 1;
+                    }
                 }
             }
             ClearEvent(&uievent);
+            if (handled && g_running) reader_render();
         } else {
             OSSleep(25);
         }

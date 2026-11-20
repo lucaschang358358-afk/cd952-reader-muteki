@@ -11,7 +11,8 @@ typedef enum {
     BOOK_FMT_TXT,
     BOOK_FMT_EPUB,
     BOOK_FMT_PDF,
-    BOOK_FMT_BMP
+    BOOK_FMT_BMP,
+    BOOK_FMT_PNG
 } BookFormat;
 
 typedef struct {
