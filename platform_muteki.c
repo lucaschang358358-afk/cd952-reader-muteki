@@ -1,10 +1,5 @@
 /*
  * 無敵 CD-952 (Besta RTOS / Project Muteki) 實機平台實作
- * 參考 WoodyBoy (Project-Muteki) 的官方 muteki / mutekix API 撰寫：
- * - 系統原生檔案選擇器 (_GetOpenFileName / _GetNextFileName)
- * - 系統原生中文點陣字型 (SetFontType(MONOSPACE_CJK) + WriteAlignString)
- * - 直接寫入 LCD Framebuffer (支援 XRGB / RGB565) 並相容 24-bit BMP 顯示
- * - 原生按鍵事件迴圈 (GetEvent / UI_EVENT_TYPE_KEY)
  */
 
 #include <stdbool.h>
@@ -13,13 +8,67 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if __has_include(<muteki/common.h>)
+#include <muteki/common.h>
+#endif
+#if __has_include(<muteki/threading.h>)
 #include <muteki/threading.h>
+#endif
+#if __has_include(<muteki/utf16.h>)
 #include <muteki/utf16.h>
+#endif
+
+#if __has_include(<muteki/draw/font.h>)
 #include <muteki/draw/font.h>
+#elif __has_include(<muteki/ui/font.h>)
+#include <muteki/ui/font.h>
+#elif __has_include(<muteki/font.h>)
+#include <muteki/font.h>
+#endif
+
+#if __has_include(<muteki/draw/lcd.h>)
 #include <muteki/draw/lcd.h>
+#elif __has_include(<muteki/ui/lcd.h>)
+#include <muteki/ui/lcd.h>
+#elif __has_include(<muteki/lcd.h>)
+#include <muteki/lcd.h>
+#endif
+
+#if __has_include(<muteki/draw/surface.h>)
 #include <muteki/draw/surface.h>
+#elif __has_include(<muteki/ui/surface.h>)
+#include <muteki/ui/surface.h>
+#elif __has_include(<muteki/surface.h>)
+#include <muteki/surface.h>
+#endif
+
+#if __has_include(<muteki/ui/canvas.h>)
+#include <muteki/ui/canvas.h>
+#endif
+#if __has_include(<muteki/ui/common.h>)
+#include <muteki/ui/common.h>
+#endif
+#if __has_include(<muteki/ui.h>)
+#include <muteki/ui.h>
+#endif
+
+#if __has_include(<muteki/ui/framework/event.h>)
 #include <muteki/ui/framework/event.h>
+#elif __has_include(<muteki/ui/event.h>)
+#include <muteki/ui/event.h>
+#elif __has_include(<muteki/event.h>)
+#include <muteki/event.h>
+#endif
+
+#if __has_include(<muteki/ui/modals/filepicker.h>)
 #include <muteki/ui/modals/filepicker.h>
+#elif __has_include(<muteki/ui/views/filepicker.h>)
+#include <muteki/ui/views/filepicker.h>
+#elif __has_include(<muteki/ui/filepicker.h>)
+#include <muteki/ui/filepicker.h>
+#elif __has_include(<muteki/filepicker.h>)
+#include <muteki/filepicker.h>
+#endif
 
 #include "hal.h"
 #include "reader_core.h"
@@ -45,7 +94,7 @@ static size_t utf8_to_utf16(const char *src, int src_len, UTF16 *dst, size_t max
             cp = ((c & 0x0F) << 12) | ((src[i + 1] & 0x3F) << 6) | (src[i + 2] & 0x3F);
             i += 3;
         } else if ((c & 0xF8) == 0xF0 && i + 3 < src_len) {
-            cp = 0x3F; /* '?' (BMP 外字元) */
+            cp = 0x3F;
             i += 4;
         } else {
             cp = 0x3F;
@@ -207,7 +256,6 @@ int hal_open_file_dialog(char *out_path, int max_len) {
 
 int hal_find_sibling_bmp(const char *current_path, int delta, char *out_path, int max_len) {
     (void)current_path; (void)delta; (void)out_path; (void)max_len;
-    /* 實機版可透過按 [O] 呼叫系統檔案選擇器切換圖片 */
     return 0;
 }
 
