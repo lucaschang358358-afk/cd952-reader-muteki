@@ -159,8 +159,8 @@ void hal_draw_line_utf8(int x, int y, const char *utf8_text, int byte_len, int f
         x, y,
         u16buf,
         g_lcd->width - x,
-        LCD_STR_ALIGN_LEFT,
-        LCD_PRINT_NONE
+        STR_ALIGN_LEFT,
+        PRINT_NONE
     );
 }
 
@@ -226,7 +226,7 @@ int hal_draw_bmp_file(const char *filepath, int x, int y, int w, int h) {
 
 int hal_open_file_dialog(char *out_path, int max_len) {
     UTF16 utf16path[FILEPICKER_CONTEXT_OUTPUT_MAX_LFN] = {0};
-    ui_filepicker_context_t ctx = {0};
+    filepicker_context_t ctx = {0};
     void *ctx_out = FILEPICKER_CONTEXT_OUTPUT_ALLOC(calloc, 1, true);
     if (!ctx_out) return 0;
 
@@ -278,9 +278,9 @@ int main(void) {
     ui_event_t uievent = {0};
     while (g_running) {
         if (TestKeyEvent(&uievent) && GetEvent(&uievent)) {
-            if (uievent.body.event_type == UI_EVENT_TYPE_KEY) {
+            if (uievent.event_type == UI_EVENT_TYPE_KEY) {
                 KeyCode k = KEY_NONE;
-                switch (uievent.body.key_code0) {
+                switch (uievent.key_code0) {
                     case 1:   k = KEY_QUIT; break;   /* KEY_ESC */
                     case 2:   k = KEY_PREV; break;   /* KEY_LEFT */
                     case 3:   k = KEY_PREV; break;   /* KEY_UP */
