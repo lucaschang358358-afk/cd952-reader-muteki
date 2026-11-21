@@ -18,6 +18,7 @@ void ui_draw_badge(int x, int y, const char *tag, uint32_t bg, uint32_t fg);
 uint32_t ui_format_color(BookFormat fmt);
 void ui_draw_book_cover(int x, int y, int w, int h, const char *title, BookFormat fmt, int is_dark);
 void ui_draw_book_cover_img(int x, int y, int w, int h, const uint8_t *rgb, int img_w, int img_h, BookFormat fmt, int is_dark);
+void ui_draw_folder_card(int x, int y, int w, int h, const uint8_t *thumb_rgb, int tw, int th, int book_count, uint32_t accent, int is_dark);
 
 void ui_icon_shelf(int cx, int cy, uint32_t col);
 void ui_icon_list(int cx, int cy, uint32_t col);

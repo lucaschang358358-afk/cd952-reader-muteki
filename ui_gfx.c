@@ -1,4 +1,5 @@
 #include "ui_gfx.h"
+#include <stdio.h>
 #include <string.h>
 
 static const uint8_t FONT5X7[][5] = {
@@ -246,4 +247,41 @@ void ui_icon_stats(int cx, int cy, uint32_t col) {
     hal_fill_rect(cx - 2,  cy - 4, 5, 13, col);
     hal_fill_rect(cx + 6,  cy - 9, 5, 18, col);
     hal_fill_rect(cx - 12, cy + 10, 25, 2, col);
+}
+
+void ui_draw_folder_card(int x, int y, int w, int h, const uint8_t *thumb_rgb, int tw, int th, int book_count, uint32_t accent, int is_dark) {
+    uint32_t shcol = is_dark ? 0x090B0E : 0xC5BFB3;
+    uint32_t back_col = ui_blend_color(accent, is_dark ? 0x000000 : 0x1E293B, 35);
+    uint32_t front_col = ui_blend_color(accent, is_dark ? 0x111419 : 0xFFFFFF, is_dark ? 25 : 15);
+    uint32_t gloss = ui_blend_color(front_col, 0xFFFFFF, 25);
+
+    /* 資料夾底影 */
+    ui_fill_round_rect(x + 4, y + 12, w - 2, h - 10, 7, shcol);
+    /* 資料夾上方標籤頁 (Tab) + 背板 */
+    ui_fill_round_rect(x, y + 2, (w * 46) / 100, 16, 5, back_col);
+    ui_fill_round_rect(x, y + 10, w - 2, h - 12, 7, back_col);
+
+    /* 中間夾著的書頁白邊 */
+    hal_fill_rect(x + 8, y + 14, w - 18, 6, 0xF1EFEA);
+
+    /* 資料夾前蓋 */
+    ui_fill_round_rect(x, y + 20, w - 2, h - 22, 7, front_col);
+    hal_fill_rect(x + 6, y + 21, w - 14, 2, gloss);
+
+    /* 若裡面有書且有真封面縮圖，在資料夾中央鑲嵌迷你封面預覽 */
+    if (thumb_rgb && tw > 0 && th > 0 && w >= 60 && h >= 76) {
+        int pw = (w * 52) / 100;
+        int ph = h - 36;
+        if (ph > (pw * 4) / 3) ph = (pw * 4) / 3;
+        int px = x + (w - pw) / 2 - 1;
+        int py = y + 26 + ((h - 32) - ph) / 2;
+        ui_fill_round_rect(px - 2, py - 2, pw + 4, ph + 4, 4, 0xFFFFFF);
+        hal_blit_rgb888_scaled(thumb_rgb, tw, th, px, py, pw, ph, px, py, pw, ph, 0);
+    }
+
+    /* 右上本數膠囊標籤 (例如 "12") */
+    char cnt_str[16];
+    snprintf(cnt_str, sizeof(cnt_str), "%d", book_count);
+    int bw = ui_ascii_width(cnt_str, 1) + 12;
+    ui_draw_badge(x + w - bw - 8, y + 24, cnt_str, is_dark ? 0x111419 : 0x1E293B, 0xFFFFFF);
 }
