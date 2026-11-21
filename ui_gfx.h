@@ -23,6 +23,7 @@ void ui_draw_folder_card(int x, int y, int w, int h, const uint8_t *thumb_rgb, i
 void ui_icon_shelf(int cx, int cy, uint32_t col);
 void ui_icon_list(int cx, int cy, uint32_t col);
 void ui_icon_stats(int cx, int cy, uint32_t col);
+void ui_icon_trophy(int cx, int cy, uint32_t col);
 void ui_icon_palette(int cx, int cy, uint32_t col);
 void ui_icon_import(int cx, int cy, uint32_t col);
 void ui_icon_open_book(int cx, int cy, uint32_t accent, uint32_t page_col, uint32_t line_col);

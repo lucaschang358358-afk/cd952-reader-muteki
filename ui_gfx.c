@@ -285,3 +285,11 @@ void ui_draw_folder_card(int x, int y, int w, int h, const uint8_t *thumb_rgb, i
     int bw = ui_ascii_width(cnt_str, 1) + 12;
     ui_draw_badge(x + w - bw - 8, y + 24, cnt_str, is_dark ? 0x111419 : 0x1E293B, 0xFFFFFF);
 }
+
+void ui_icon_trophy(int cx, int cy, uint32_t col) {
+    hal_fill_rect(cx - 7, cy - 8, 15, 9, col);
+    hal_draw_rect(cx - 10, cy - 6, 4, 5, col);
+    hal_draw_rect(cx + 7, cy - 6, 4, 5, col);
+    hal_fill_rect(cx - 2, cy + 1, 5, 5, col);
+    hal_fill_rect(cx - 6, cy + 6, 13, 3, col);
+}

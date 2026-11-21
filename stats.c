@@ -173,3 +173,43 @@ int stats_calc_streak(int cur_y, int cur_m, int cur_d) {
     }
     return streak;
 }
+
+void stats_get_last_7_days(int cur_y, int cur_m, int cur_d, uint32_t out_secs[7], uint32_t out_pages[7], char out_labels[7][8]) {
+    int y = cur_y, m = cur_m, d = cur_d;
+    for (int i = 6; i >= 0; i--) {
+        stats_get_day(y, m, d, &out_secs[i], &out_pages[i]);
+        snprintf(out_labels[i], 8, "%d/%d", m, d);
+        prev_date(&y, &m, &d);
+    }
+}
+void stats_get_12_months(int year, uint32_t out_secs[12], uint32_t out_pages[12]) {
+    for (int m = 0; m < 12; m++) { out_secs[m] = 0; out_pages[m] = 0; }
+    for (int i = 0; i < g_day_count; i++) {
+        if (g_days[i].year == year && g_days[i].month >= 1 && g_days[i].month <= 12) {
+            out_secs[g_days[i].month - 1] += g_days[i].seconds;
+            out_pages[g_days[i].month - 1] += g_days[i].pages;
+        }
+    }
+}
+uint32_t stats_lifetime_secs(void) { uint32_t s = 0; for (int i = 0; i < g_day_count; i++) s += g_days[i].seconds; return s; }
+uint32_t stats_lifetime_pages(void) { uint32_t p = 0; for (int i = 0; i < g_day_count; i++) p += g_days[i].pages; return p; }
+int stats_lifetime_active_days(void) { int c = 0; for (int i = 0; i < g_day_count; i++) if (g_days[i].seconds >= 10 || g_days[i].pages > 0) c++; return c; }
+int stats_count_goal_days(int goal_mins) {
+    if (goal_mins <= 0) return 0;
+    uint32_t need = (uint32_t)goal_mins * 60u; int c = 0;
+    for (int i = 0; i < g_day_count; i++) if (g_days[i].seconds >= need) c++;
+    return c;
+}
+void stats_get_week_totals(int cur_y, int cur_m, int cur_d, int goal_mins, uint32_t *out_secs, uint32_t *out_pages, int *out_active_days, int *out_goal_days) {
+    int dow = stats_day_of_week(cur_y, cur_m, cur_d), y = cur_y, m = cur_m, d = cur_d, ad = 0, gd = 0;
+    uint32_t ts = 0, tp = 0, gneed = (uint32_t)(goal_mins > 0 ? goal_mins : 20) * 60u;
+    for (int i = 0; i <= dow; i++) {
+        uint32_t s = 0, p = 0; stats_get_day(y, m, d, &s, &p);
+        ts += s; tp += p; if (s >= 10 || p > 0) ad++; if (s >= gneed) gd++;
+        prev_date(&y, &m, &d);
+    }
+    if (out_secs) *out_secs = ts;
+    if (out_pages) *out_pages = tp;
+    if (out_active_days) *out_active_days = ad;
+    if (out_goal_days) *out_goal_days = gd;
+}

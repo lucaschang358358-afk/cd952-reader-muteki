@@ -101,6 +101,11 @@ static size_t g_fb_bytes = 0;
 
 static TextCmd g_text_q[MAX_TEXT_QUEUE];
 static int g_text_q_len = 0;
+static int g_font_style = 0;
+static int g_font_size_idx = 1;
+static int g_trans_mode = 0;
+static int g_trans_dir = 0;
+static void *g_prev_fb = NULL;
 static uint32_t g_text_bg = 0xF4F1EA;
 static int g_running = 1;
 
@@ -408,10 +413,60 @@ void hal_dim_rect(int rx, int ry, int rw, int rh) {
     }
 }
 
+static void run_page_transition_fx(void) {
+    if (!g_prev_fb || !g_backbuf || !g_lcd || !g_lcd->surface || !g_lcd->surface->buffer) return;
+    int mode = g_trans_mode, dir = g_trans_dir;
+    g_trans_mode = 0; g_trans_dir = 0;
+    if (mode <= 0 || mode > 3) return;
+
+    size_t bpp = g_is_xrgb ? 4u : 2u;
+    size_t row_bytes = (size_t)g_w * bpp;
+    uint8_t *dst = (uint8_t *)g_lcd->surface->buffer;
+    const uint8_t *prev = (const uint8_t *)g_prev_fb;
+    const uint8_t *cur  = (const uint8_t *)g_backbuf;
+    int y0 = 37, y1 = g_h - 38;
+    if (y0 >= y1) return;
+
+    if (mode == 1 || mode == 2) {
+        for (int step = 1; step <= 3; step++) {
+            int split = (g_w * step) / 4;
+            for (int y = y0; y < y1; y++) {
+                uint8_t *dr = dst + (size_t)y * row_bytes;
+                const uint8_t *pr = prev + (size_t)y * row_bytes;
+                const uint8_t *cr = cur  + (size_t)y * row_bytes;
+                if (dir >= 0) {
+                    int cut = g_w - split;
+                    if (mode == 1) {
+                        memcpy(dr, pr + (size_t)split * bpp, (size_t)cut * bpp);
+                        memcpy(dr + (size_t)cut * bpp, cr, (size_t)split * bpp);
+                    } else {
+                        memcpy(dr, pr, (size_t)cut * bpp);
+                        memcpy(dr + (size_t)cut * bpp, cr + (size_t)cut * bpp, (size_t)split * bpp);
+                    }
+                } else {
+                    if (mode == 1) {
+                        memcpy(dr, cr + (size_t)(g_w - split) * bpp, (size_t)split * bpp);
+                        memcpy(dr + (size_t)split * bpp, pr, (size_t)(g_w - split) * bpp);
+                    } else {
+                        memcpy(dr, cr, (size_t)split * bpp);
+                        memcpy(dr + (size_t)split * bpp, pr + (size_t)split * bpp, (size_t)(g_w - split) * bpp);
+                    }
+                }
+            }
+            OSSleep(12);
+        }
+    } else if (mode == 3) {
+        for (int y = y0; y < y1; y += 2) {
+            memcpy(dst + (size_t)y * row_bytes, cur + (size_t)y * row_bytes, row_bytes);
+        }
+        OSSleep(18);
+    }
+}
+
 void hal_present(void) {
     if (!g_lcd || !g_lcd->surface || !g_lcd->surface->buffer || !g_backbuf) return;
+    if (g_trans_mode > 0) run_page_transition_fx();
     memcpy(g_lcd->surface->buffer, g_backbuf, g_fb_bytes);
-
     if (g_text_q_len > 0) {
         SetFontType(MONOSPACE_CJK);
         UTF16 u16[256];
@@ -422,12 +477,28 @@ void hal_present(void) {
             if (dx + mw > g_w) mw = g_w - dx;
             if (mw <= 8) continue;
             utf8_to_utf16(tc->text, (int)strlen(tc->text), u16, 256);
-            rgbSetColor(tc->fg);
+
+            int is_body = (tc->y > 38 && tc->y < g_h - 40);
+            uint32_t fg = tc->fg;
+            if (is_body && g_font_style == 3) {
+                uint32_t luma = ((tc->bg >> 16) & 0xFF) + ((tc->bg >> 8) & 0xFF) + (tc->bg & 0xFF);
+                fg = (luma > 380) ? 0x000000 : 0xFFFFFF;
+            }
+            if (is_body && g_font_style == 2 && dx + 1 < g_w && tc->y + 1 < g_h) {
+                rgbSetColor(dim75_rgb(tc->bg));
+                rgbSetBkColor(tc->bg);
+                WriteAlignString(dx + 1, tc->y + 1, u16, mw - 1, STR_ALIGN_LEFT, PRINT_NONE);
+            }
+            rgbSetColor(fg);
             rgbSetBkColor(tc->bg);
             WriteAlignString(dx, tc->y, u16, mw, STR_ALIGN_LEFT, PRINT_NONE);
+            if (is_body && g_font_style == 1 && dx + 1 < g_w) {
+                WriteAlignString(dx + 1, tc->y, u16, mw - 1, STR_ALIGN_LEFT, PRINT_NONE);
+            }
         }
         g_text_q_len = 0;
     }
+    if (g_prev_fb) memcpy(g_prev_fb, g_lcd->surface->buffer, g_fb_bytes);
 }
 
 /* 同時支援 24-bit BMP 與原生 PNG (RAM 解碼，不存任何暫存檔) */
@@ -498,6 +569,19 @@ int hal_draw_image_file(const char *filepath, int x, int y, int w, int h) {
 }
 
 const char *hal_get_library_path(void) { return "C:\\cd952_books_v6.idx"; }
+
+void hal_set_font_style(int style, int size_idx) {
+    g_font_style = (style >= 0 && style < 4) ? style : 0;
+    g_font_size_idx = (size_idx >= 0 && size_idx < 4) ? size_idx : 1;
+}
+
+void hal_queue_transition(int mode, int dir) {
+    g_trans_mode = mode;
+    g_trans_dir = dir;
+}
+
+const char *hal_get_rpg_path(void) { return "C:\\cd952_rpg_v8.dat"; }
+
 const char *hal_get_stats_path(void)   { return "C:\\cd952_stats.dat"; }
 
 void hal_get_local_time(int *y, int *m, int *d, int *hh, int *mm, int *ss) {
@@ -595,6 +679,11 @@ static ReaderKey map_key(short code, char *out_char) {
         case 51:  return RKEY_TAB3;
         case 52:  return RKEY_TAB4;
         case 53:  return RKEY_TAB5;
+        case 54:  return RKEY_TAB6;
+        case 65:  case 97:  return RKEY_AUTO;
+        case 69:  case 101: return RKEY_EDIT;
+        case 73:  case 105: return RKEY_REPORT;
+        case 83:  case 115: return RKEY_STYLE;
         case 66: case 98:  return RKEY_SHELF;
         case 67: case 99:  return RKEY_TOC;
         case 68: case 100: return RKEY_DELETE;
@@ -624,6 +713,7 @@ int main(void) {
     g_fb_bytes = (size_t)g_w * (size_t)g_h * (g_is_xrgb ? 4u : 2u);
     g_backbuf = malloc(g_fb_bytes);
     if (!g_backbuf) return 1;
+    g_prev_fb = malloc(g_fb_bytes);
 
     reader_init();
     reader_render();
@@ -671,6 +761,7 @@ int main(void) {
     }
 
     reader_shutdown();
+    free(g_prev_fb);
     free(g_backbuf);
     return 0;
 }

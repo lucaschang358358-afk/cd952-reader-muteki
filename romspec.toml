@@ -3,8 +3,8 @@ title = "CD952 Modern Reader"
 short-title = "Reader"
 category = "APPLET_TOOL"
 default-locale = "en"
-copyright = "CD952 Modern Reader v7 (MIT)"
-version = "7.0.0"
+copyright = "CD952 Modern Reader v8 (MIT)"
+version = "8.0.0"
 
 [metadata.en]
 title = "CD952 Modern Reader"
