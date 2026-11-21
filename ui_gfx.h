@@ -28,4 +28,8 @@ void ui_icon_palette(int cx, int cy, uint32_t col);
 void ui_icon_import(int cx, int cy, uint32_t col);
 void ui_icon_open_book(int cx, int cy, uint32_t accent, uint32_t page_col, uint32_t line_col);
 
+void ui_draw_star(int cx, int cy, int filled, uint32_t col, uint32_t empty_col);
+void ui_draw_star_row(int x, int y, int rating, int max_stars, int spacing, uint32_t fill_col, uint32_t empty_col);
+void ui_draw_radar_5(int cx, int cy, int radius, const int vals[5], uint32_t grid_col, uint32_t fill_col, uint32_t line_col, uint32_t bg_col);
+
 #endif

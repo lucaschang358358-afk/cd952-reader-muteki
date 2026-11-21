@@ -1,5 +1,5 @@
 project('cd952-reader', 'c',
-  version : '8.0.0',
+  version : '9.0.0',
   default_options : ['warning_level=2'])
 
 c = meson.get_compiler('c')
@@ -17,7 +17,7 @@ reader_elf = executable('cd952-reader',
   [touch_adapt_h,
    'inflate_tiny.c', 'jpeg_tiny.c', 'png_tiny.c', 'pdf_engine.c',
    'book_loader.c', 'stats.c', 'themes.c', 'covers.c',
-   'achievements.c', 'txt_tools.c', 'ui_gfx.c',
+   'achievements.c', 'txt_tools.c', 'v9_almanac.c', 'ui_gfx.c',
    'reader_core.c', 'platform_muteki.c'],
   name_suffix: 'elf',
   dependencies: mutekix_lib,

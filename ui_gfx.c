@@ -293,3 +293,107 @@ void ui_icon_trophy(int cx, int cy, uint32_t col) {
     hal_fill_rect(cx - 2, cy + 1, 5, 5, col);
     hal_fill_rect(cx - 6, cy + 6, 13, 3, col);
 }
+
+/* 精緻 9x9 現代像素星星 (實心金星 / 空心星) */
+static const uint16_t STAR_FILL_9X9[9] = {
+    0x010, 0x038, 0x038, 0x1FF, 0x0FE, 0x07C, 0x0FE, 0x1C7, 0x101
+};
+static const uint16_t STAR_OUT_9X9[9] = {
+    0x010, 0x028, 0x028, 0x1C7, 0x082, 0x044, 0x092, 0x129, 0x101
+};
+
+void ui_draw_star(int cx, int cy, int filled, uint32_t col, uint32_t empty_col) {
+    const uint16_t *mask = filled ? STAR_FILL_9X9 : STAR_OUT_9X9;
+    uint32_t c = filled ? col : empty_col;
+    int x0 = cx - 4, y0 = cy - 4;
+    for (int r = 0; r < 9; r++) {
+        uint16_t row = mask[r];
+        for (int b = 0; b < 9; b++) {
+            if (row & (1u << (8 - b))) hal_put_pixel(x0 + b, y0 + r, c);
+        }
+    }
+}
+
+void ui_draw_star_row(int x, int y, int rating, int max_stars, int spacing, uint32_t fill_col, uint32_t empty_col) {
+    for (int i = 0; i < max_stars; i++) {
+        ui_draw_star(x + i * spacing + 4, y + 4, (i < rating) ? 1 : 0, fill_col, empty_col);
+    }
+}
+
+/* 純整數 5 軸雷達圖渲染器 (五邊形網格 + 掃描線柔和填充 + 亮色外框與頂點) */
+static void fill_pentagon(const int px[5], const int py[5], uint32_t col) {
+    int min_y = py[0], max_y = py[0];
+    for (int i = 1; i < 5; i++) {
+        if (py[i] < min_y) min_y = py[i];
+        if (py[i] > max_y) max_y = py[i];
+    }
+    for (int y = min_y; y <= max_y; y++) {
+        int xs[8], n = 0;
+        for (int i = 0; i < 5; i++) {
+            int j = (i + 1) % 5;
+            int y0 = py[i], y1 = py[j], x0 = px[i], x1 = px[j];
+            if ((y0 <= y && y1 > y) || (y1 <= y && y0 > y)) {
+                int ix = x0 + ((y - y0) * (x1 - x0)) / (y1 - y0);
+                if (n < 8) xs[n++] = ix;
+            }
+        }
+        for (int a = 0; a < n; a++) {
+            for (int b = a + 1; b < n; b++) {
+                if (xs[b] < xs[a]) { int t = xs[a]; xs[a] = xs[b]; xs[b] = t; }
+            }
+        }
+        for (int a = 0; a + 1 < n; a += 2) {
+            if (xs[a + 1] > xs[a]) hal_fill_rect(xs[a], y, xs[a + 1] - xs[a], 1, col);
+        }
+    }
+}
+
+void ui_draw_radar_5(int cx, int cy, int radius, const int vals[5],
+                     uint32_t grid_col, uint32_t fill_col, uint32_t line_col, uint32_t bg_col) {
+    /* 5 軸單位向量 * 1000: -90°, -18°, 54°, 126°, 198° */
+    static const int DX[5] = {    0,  951,  588, -588, -951 };
+    static const int DY[5] = { -1000, -309,  809,  809, -309 };
+
+    /* 1. 畫 4 層同心五邊形網格 */
+    for (int lv = 1; lv <= 4; lv++) {
+        int r = (radius * lv) / 4;
+        int gx[5], gy[5];
+        for (int i = 0; i < 5; i++) {
+            gx[i] = cx + (r * DX[i]) / 1000;
+            gy[i] = cy + (r * DY[i]) / 1000;
+        }
+        uint32_t gc = (lv == 4) ? grid_col : ui_blend_color(bg_col, grid_col, 55);
+        for (int i = 0; i < 5; i++) {
+            hal_draw_line(gx[i], gy[i], gx[(i + 1) % 5], gy[(i + 1) % 5], gc);
+        }
+    }
+
+    /* 2. 畫 5 條中心輻射軸線 */
+    for (int i = 0; i < 5; i++) {
+        hal_draw_line(cx, cy, cx + (radius * DX[i]) / 1000, cy + (radius * DY[i]) / 1000, ui_blend_color(bg_col, grid_col, 65));
+    }
+
+    /* 3. 計算數值五邊形並柔和填充 */
+    int vx[5], vy[5];
+    for (int i = 0; i < 5; i++) {
+        int v = vals[i];
+        if (v < 8) v = 8;
+        if (v > 100) v = 100;
+        int r = (radius * v) / 100;
+        vx[i] = cx + (r * DX[i]) / 1000;
+        vy[i] = cy + (r * DY[i]) / 1000;
+    }
+    fill_pentagon(vx, vy, ui_blend_color(bg_col, fill_col, 35));
+
+    /* 4. 畫加粗外框線與發光頂點圓 */
+    for (int i = 0; i < 5; i++) {
+        int j = (i + 1) % 5;
+        hal_draw_line(vx[i], vy[i], vx[j], vy[j], line_col);
+        hal_draw_line(vx[i] + 1, vy[i], vx[j] + 1, vy[j], line_col);
+        hal_draw_line(vx[i], vy[i] + 1, vx[j], vy[j] + 1, line_col);
+    }
+    for (int i = 0; i < 5; i++) {
+        hal_fill_circle(vx[i], vy[i], 4, line_col);
+        hal_fill_circle(vx[i], vy[i], 2, 0xFFFFFF);
+    }
+}

@@ -7,6 +7,7 @@
 #include "themes.h"
 #include "txt_tools.h"
 #include "ui_gfx.h"
+#include "v9_almanac.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +29,8 @@ typedef enum {
     SCR_BOOK_STYLE,
     SCR_TXT_EDITOR,
     SCR_DAILY_REPORT,
-    SCR_EYE_BREAK
+    SCR_EYE_BREAK,
+    SCR_FILTER
 } ScreenMode;
 
 typedef enum {
@@ -888,18 +890,39 @@ void reader_on_key(ReaderKey key, char raw_char) {
         }
         return;
     }
+    if (g_screen == SCR_FILTER) {
+        if (key == RKEY_BACK || is_ok) { g_screen = SCR_HOME; return; }
+        if (key == RKEY_LEFT || key == RKEY_RIGHT) {
+            int d = (key == RKEY_RIGHT) ? 1 : -1;
+            g_filter_fmt = (g_filter_fmt + 5 + d) % 5; g_shelf_sel = 0;
+        } else if (key == RKEY_UP || key == RKEY_DOWN) {
+            int d = (key == RKEY_DOWN) ? 1 : -1;
+            g_filter_status = (g_filter_status + 5 + d) % 5; g_shelf_sel = 0;
+        }
+        return;
+    }
     if (g_screen == SCR_BOOK_STYLE) {
         if (key == RKEY_BACK || key == RKEY_STYLE) { save_library(); eval_rpg_and_toast(); g_screen = SCR_HOME; return; }
         if (g_style_book_idx < 0 || g_style_book_idx >= g_book_count) { g_screen = SCR_HOME; return; }
         BookEntry *be = &g_books[g_style_book_idx];
-        if (key == RKEY_UP) g_style_row = (g_style_row + 2) % 3;
-        else if (key == RKEY_DOWN) g_style_row = (g_style_row + 1) % 3;
-        else if (key == RKEY_LEFT || key == RKEY_RIGHT || is_ok) {
+        if (key == RKEY_UP) g_style_row = (g_style_row + 3) % 4;
+        else if (key == RKEY_DOWN) g_style_row = (g_style_row + 1) % 4;
+        else if (key == RKEY_LEFT || key == RKEY_RIGHT) {
             int d = (key == RKEY_LEFT) ? -1 : 1;
             if (g_style_row == 0) { be->cover_style = (be->cover_style + NUM_COVER_STYLES + d) % NUM_COVER_STYLES; rpg_profile()->total_covers_styled++; }
             else if (g_style_row == 1) be->read_status = (be->read_status + 4 + d) % 4;
-            else be->rating = (be->rating + 6 + d) % 6;
+            else if (g_style_row == 2) be->rating = (be->rating + 6 + d) % 6;
             save_library(); eval_rpg_and_toast();
+        } else if (is_ok) {
+            if (g_style_row == 3) {
+                char t[384]; snprintf(t, sizeof(t), "%s", be->path);
+                save_library(); reader_open_file(t);
+            } else {
+                if (g_style_row == 0) { be->cover_style = (be->cover_style + 1) % NUM_COVER_STYLES; rpg_profile()->total_covers_styled++; }
+                else if (g_style_row == 1) be->read_status = (be->read_status + 1) % 4;
+                else be->rating = (be->rating + 1) % 6;
+                save_library(); eval_rpg_and_toast();
+            }
         }
         return;
     }
@@ -1007,7 +1030,7 @@ void reader_on_key(ReaderKey key, char raw_char) {
         if (key == RKEY_BACK) { if (g_home_tab == TAB_SHELF && g_cur_folder[0]) { g_cur_folder[0] = '\0'; g_shelf_sel = 0; } else hal_request_quit(); return; }
 
         if (g_home_tab == TAB_STATS) {
-            if (key == RKEY_SPACE || key == RKEY_OK) { g_stats_subtab = (g_stats_subtab + 1) % 4; return; }
+            if (key == RKEY_SPACE || key == RKEY_OK) { g_stats_subtab = (g_stats_subtab + 1) % 5; return; }
             if (g_stats_subtab == 0) {
                 if (key == RKEY_UP) g_stats_doy -= 1;
                 else if (key == RKEY_DOWN) g_stats_doy += 1;
@@ -1021,7 +1044,7 @@ void reader_on_key(ReaderKey key, char raw_char) {
             } else if (g_stats_subtab == 2) {
                 if ((key == RKEY_LEFT || key == RKEY_PGUP) && g_stats_year > 2020) g_stats_year--;
                 else if ((key == RKEY_RIGHT || key == RKEY_PGDN) && g_stats_year < 2040) g_stats_year++;
-            } else if (g_stats_subtab == 3) {
+            } else if (g_stats_subtab == 4) {
                 if (key == RKEY_LEFT) step_report_day(-1);
                 else if (key == RKEY_RIGHT) step_report_day(1);
             }
@@ -1075,8 +1098,8 @@ void reader_on_key(ReaderKey key, char raw_char) {
             if (g_shelf_sel >= tot) g_shelf_sel = tot - 1;
             if (key == RKEY_LEFT && g_shelf_sel > 0) g_shelf_sel--;
             else if (key == RKEY_RIGHT && g_shelf_sel + 1 < tot) g_shelf_sel++;
-            else if (key == RKEY_UP) { if (has_hero && g_shelf_sel >= 5) g_shelf_sel -= 4; else if (has_hero && g_shelf_sel >= 1) g_shelf_sel = 0; else if (!has_hero && g_shelf_sel >= 4) g_shelf_sel -= 4; }
-            else if (key == RKEY_DOWN) { if (has_hero && g_shelf_sel == 0 && gcnt > 0) g_shelf_sel = 1; else if (g_shelf_sel + 4 < tot) g_shelf_sel += 4; else if (g_shelf_sel + 1 < tot) g_shelf_sel = tot - 1; }
+            else if (key == RKEY_UP) { if (has_hero && g_shelf_sel >= 4) g_shelf_sel -= 3; else if (has_hero && g_shelf_sel >= 1) g_shelf_sel = 0; else if (!has_hero && g_shelf_sel >= 3) g_shelf_sel -= 3; }
+            else if (key == RKEY_DOWN) { if (has_hero && g_shelf_sel == 0 && gcnt > 0) g_shelf_sel = 1; else if (g_shelf_sel + 3 < tot) g_shelf_sel += 3; else if (g_shelf_sel + 1 < tot) g_shelf_sel = tot - 1; }
             else if (key == RKEY_STYLE) {
                 int bi = (has_hero && g_shelf_sel == 0) ? 0 : ((g_shelf_sel - has_hero < gcnt && gtypes[g_shelf_sel - has_hero] == 0) ? gidxs[g_shelf_sel - has_hero] : -1);
                 if (bi >= 0) open_book_style_modal(bi);
@@ -1280,22 +1303,58 @@ void reader_on_touch(int tx, int ty) {
         }
         return;
     }
+    if (g_screen == SCR_FILTER) {
+        int mw = 480, mh = 270, mx = (w - mw) / 2, my = (h - mh) / 2;
+        if (tx < mx || tx > mx + mw || ty < my || ty > my + mh) { g_screen = SCR_HOME; return; }
+        if (ty >= my + 78 && ty <= my + 116) {
+            int fi = (tx - (mx + 20)) / 88;
+            if (fi >= 0 && fi < 5) { g_filter_fmt = fi; g_shelf_sel = 0; }
+            return;
+        }
+        if (ty >= my + 152 && ty <= my + 190) {
+            int si = (tx - (mx + 20)) / 88;
+            if (si >= 0 && si < 5) { g_filter_status = si; g_shelf_sel = 0; }
+            return;
+        }
+        if (ty >= my + 214) {
+            if (tx < mx + mw / 2) { g_filter_fmt = 0; g_filter_status = 0; g_shelf_sel = 0; }
+            g_screen = SCR_HOME;
+        }
+        return;
+    }
     if (g_screen == SCR_BOOK_STYLE) {
-        int mw = 560, mh = 370, mx = (w - mw) / 2, my = (h - mh) / 2;
-        if (tx < mx || tx > mx + mw || ty < my || ty > my + mh) { save_library(); eval_rpg_and_toast(); g_screen = SCR_HOME; return; }
         BookEntry *be = (g_style_book_idx >= 0 && g_style_book_idx < g_book_count) ? &g_books[g_style_book_idx] : NULL;
         if (!be) { g_screen = SCR_HOME; return; }
-        if (ty >= my + 114 && ty <= my + 156 && tx >= mx + 170) {
-            be->cover_style = (be->cover_style + NUM_COVER_STYLES + (tx < mx + 360 ? -1 : 1)) % NUM_COVER_STYLES;
+        if (ty <= 44 && tx <= 116) { save_library(); eval_rpg_and_toast(); g_screen = SCR_HOME; return; }
+        /* 左欄：封面模板切換 (< / >) */
+        if (tx >= 28 && tx <= 216 && ty >= 316 && ty <= 360) {
+            int d = (tx < 122) ? -1 : 1;
+            be->cover_style = (be->cover_style + NUM_COVER_STYLES + d) % NUM_COVER_STYLES;
             rpg_profile()->total_covers_styled++; save_library(); eval_rpg_and_toast(); return;
         }
-        if (ty >= my + 190 && ty <= my + 232 && tx >= mx + 170) {
-            int st = (tx - (mx + 170)) / 92; if (st >= 0 && st < 4) { be->read_status = st; save_library(); eval_rpg_and_toast(); } return;
+        /* 右欄：5顆星星點擊 */
+        if (tx >= 244 && tx <= 520 && ty >= 100 && ty <= 142) {
+            int star = (tx - 244) / 36 + 1;
+            if (star >= 1 && star <= 5) { be->rating = (be->rating == star) ? 0 : star; save_library(); eval_rpg_and_toast(); }
+            return;
         }
-        if (ty >= my + 256 && ty <= my + 298 && tx >= mx + 170) {
-            int star = (tx - (mx + 170)) / 48 + 1; if (star >= 1 && star <= 5) { be->rating = (be->rating == star) ? 0 : star; save_library(); eval_rpg_and_toast(); } return;
+        /* 右欄：4個閱讀狀態膠囊 */
+        if (tx >= 244 && tx <= 760 && ty >= 170 && ty <= 212) {
+            int st = (tx - 244) / 118;
+            if (st >= 0 && st < 4) { be->read_status = st; save_library(); eval_rpg_and_toast(); }
+            return;
         }
-        if (ty >= my + mh - 52) { save_library(); eval_rpg_and_toast(); g_screen = SCR_HOME; }
+        /* 右欄底部 3 顆大操作鈕：[開始/繼續閱讀] [移資料夾] [移除] */
+        if (ty >= 390 && ty <= 442 && tx >= 244) {
+            if (tx < 490) {
+                char t[384]; snprintf(t, sizeof(t), "%s", be->path);
+                save_library(); reader_open_file(t);
+            } else if (tx < 632) {
+                g_move_book_idx = g_style_book_idx; g_move_folder_sel = 0; g_screen = SCR_MOVE_FOLDER;
+            } else {
+                remove_book_at(g_style_book_idx); g_screen = SCR_HOME;
+            }
+        }
         return;
     }
     if (g_screen == SCR_NEW_FOLDER) {
@@ -1384,35 +1443,38 @@ void reader_on_touch(int tx, int ty) {
         }
         int mx = 94, mw = w - mx - 18;
         if (g_home_tab == TAB_SHELF) {
-            if (ty <= 44) {
+            if (ty <= 46) {
                 if (g_cur_folder[0] && tx < mx + 92) { g_cur_folder[0] = '\0'; g_shelf_sel = 0; return; }
-                if (tx >= w - 160) { open_new_book_dialog(); return; }
-                if (!g_cur_folder[0] && tx >= w - 270 && tx < w - 166) { g_new_folder_buf[0] = '\0'; g_screen = SCR_NEW_FOLDER; return; }
-                if (!g_cur_folder[0] && tx >= w - 366 && tx < w - 276) { open_daily_report_modal(SCR_HOME); return; }
-                return;
-            }
-            if (!g_cur_folder[0] && ty >= 46 && ty <= 76) {
-                if (tx < mx + 310) { int fi = (tx - mx) / 62; if (fi >= 0 && fi < 5) { g_filter_fmt = fi; g_shelf_sel = 0; } }
-                else { int si = (tx - (mx + 324)) / 62; if (si >= 0 && si < 5) { g_filter_status = si; g_shelf_sel = 0; } }
+                if (tx >= w - 134) { open_new_book_dialog(); return; }
+                if (!g_cur_folder[0] && tx >= w - 228 && tx < w - 140) { g_new_folder_buf[0] = '\0'; g_screen = SCR_NEW_FOLDER; return; }
+                if (!g_cur_folder[0] && tx >= w - 312 && tx < w - 234) { open_daily_report_modal(SCR_HOME); return; }
+                if (!g_cur_folder[0] && tx >= w - 392 && tx < w - 318) { g_screen = SCR_FILTER; return; }
                 return;
             }
             int gtypes[MAX_BOOKS + MAX_FOLDERS], gidxs[MAX_BOOKS + MAX_FOLDERS];
             int gcnt = shelf_build_grid(gtypes, gidxs, MAX_BOOKS + MAX_FOLDERS);
             int has_hero = (g_cur_folder[0] == '\0' && g_filter_fmt == 0 && g_filter_status == 0 && g_book_count > 0) ? 1 : 0;
-            if (has_hero && ty >= 82 && ty <= 186) { char t[384]; snprintf(t, sizeof(t), "%s", g_books[0].path); reader_open_file(t); return; }
-            int grid_y = has_hero ? 210 : 84, gap = 12, card_w = (mw - gap * 3) / 4;
-            if (ty >= grid_y && ty <= h - 28) {
+            if (has_hero && ty >= 56 && ty <= 172) {
+                if (tx >= mx + mw - 126 && ty >= 122) { open_book_style_modal(0); return; }
+                char t[384]; snprintf(t, sizeof(t), "%s", g_books[0].path); reader_open_file(t); return;
+            }
+            int grid_y = has_hero ? 204 : 60, gap = 16, card_w = (mw - gap * 2) / 3;
+            if (ty >= grid_y && ty <= h - 26) {
                 if (gcnt == 0 && !has_hero) { open_new_book_dialog(); return; }
                 int grid_sel = (g_shelf_sel >= has_hero) ? (g_shelf_sel - has_hero) : 0;
-                int per_pg = has_hero ? 4 : 8, start_gi = (grid_sel / per_pg) * per_pg;
+                int per_pg = has_hero ? 3 : 6, start_gi = (grid_sel / per_pg) * per_pg;
                 int row = has_hero ? 0 : ((ty - grid_y) / (((h - grid_y - 34 - gap) / 2) + gap));
                 if (row >= 0 && row < (has_hero ? 1 : 2)) {
-                    for (int col = 0; col < 4; col++) {
-                        int cx = mx + col * (card_w + gap), gi = start_gi + row * 4 + col;
+                    for (int col = 0; col < 3; col++) {
+                        int cx = mx + col * (card_w + gap), gi = start_gi + row * 3 + col;
                         if (gi < gcnt && tx >= cx && tx <= cx + card_w) {
                             g_shelf_sel = gi + has_hero;
                             if (gtypes[gi] == 1) { snprintf(g_cur_folder, 48, "%s", g_folders[gidxs[gi]]); g_shelf_sel = 0; }
-                            else { char t[384]; snprintf(t, sizeof(t), "%s", g_books[gidxs[gi]].path); reader_open_file(t); }
+                            else {
+                                /* 點擊卡片右下 [詳情] 或點擊書本開啟 */
+                                if (has_hero && ty >= h - 62 && tx >= cx + card_w - 64) open_book_style_modal(gidxs[gi]);
+                                else { char t[384]; snprintf(t, sizeof(t), "%s", g_books[gidxs[gi]].path); reader_open_file(t); }
+                            }
                             return;
                         }
                     }
@@ -1435,9 +1497,9 @@ void reader_on_touch(int tx, int ty) {
         }
         if (g_home_tab == TAB_STATS) {
             if (ty <= 46) {
-                if (tx < mx + 440) { int st = (tx - mx) / 110; if (st >= 0 && st < 4) g_stats_subtab = st; return; }
-                if (tx >= w - 164 && tx < w - 92) { if (g_stats_subtab == 3) step_report_day(-1); else if (g_stats_year > 2020) g_stats_year--; }
-                else if (tx >= w - 88) { if (g_stats_subtab == 3) step_report_day(1); else if (g_stats_year < 2040) g_stats_year++; }
+                if (tx < mx + 490) { int st = (tx - mx) / 98; if (st >= 0 && st < 5) g_stats_subtab = st; return; }
+                if (tx >= w - 150 && tx < w - 84) { if (g_stats_subtab == 4) step_report_day(-1); else if (g_stats_year > 2020) g_stats_year--; }
+                else if (tx >= w - 80) { if (g_stats_subtab == 4) step_report_day(1); else if (g_stats_year < 2040) g_stats_year++; }
                 return;
             }
             if (g_stats_subtab == 0) {
@@ -1543,123 +1605,169 @@ static void render_left_rail(const AppTheme *th, int h) {
         hal_set_text_bg(bg); draw_str(20, ty + 32, labels[i], 44, active ? th->text : th->muted);
         char kb[4]; snprintf(kb, sizeof(kb), "%d", i + 1); ui_draw_ascii(rw - 15, ty + 4, kb, 1, th->muted);
     }
-    ui_draw_ascii(18, h - 18, "V8.0", 1, th->muted);
+    ui_draw_ascii(18, h - 18, "V9.0", 1, th->muted);
 }
 
 static void render_home_shelf(const AppTheme *th, int w, int h) {
-    int mx = 94, mw = w - mx - 18;
+    int mx = 96, mw = w - mx - 20;
     RpgSnapshot snap; build_rpg_snapshot(&snap); int cur_xp = 0, need_xp = 100;
     int lv = rpg_calc_level(rpg_calc_total_xp(&snap), &cur_xp, &need_xp);
     uint32_t today_s = 0, today_p = 0; stats_get_day(snap.cur_year, snap.cur_month, snap.cur_day, &today_s, &today_p);
     int gtypes[MAX_BOOKS + MAX_FOLDERS], gidxs[MAX_BOOKS + MAX_FOLDERS];
     int gcnt = shelf_build_grid(gtypes, gidxs, MAX_BOOKS + MAX_FOLDERS);
 
+    /* A. 資料夾內部 (寬鬆 3x2 大卡片) */
     if (g_cur_folder[0] != '\0') {
-        ui_fill_round_rect(mx, 10, 86, 28, 8, th->card_bg); ui_draw_round_rect(mx, 10, 86, 28, 8, th->card_border);
-        hal_set_text_bg(th->card_bg); draw_str(mx + 10, 15, "< 返回", 68, th->text);
+        ui_fill_round_rect(mx, 12, 86, 30, 10, th->card_bg); ui_draw_round_rect(mx, 12, 86, 30, 10, th->card_border);
+        hal_set_text_bg(th->card_bg); draw_str(mx + 12, 18, "< 返回", 68, th->text);
         hal_set_text_bg(th->bg); char fhdr[96]; snprintf(fhdr, sizeof(fhdr), "資料夾：%s (%d本)", g_cur_folder, gcnt);
-        draw_str(mx + 98, 15, fhdr, 300, th->text);
-        ui_fill_round_rect(w - 160, 10, 144, 28, 14, th->accent);
-        hal_set_text_bg(th->accent); draw_str(w - 148, 15, "+ 匯入此資料夾", 128, 0xFFFFFF);
-        int grid_y = 54, gap = 12, card_w = (mw - gap * 3) / 4, card_h = (h - grid_y - 34 - gap) / 2, start_gi = (g_shelf_sel / 8) * 8;
-        for (int slot = 0; slot < 8; slot++) {
+        draw_str(mx + 100, 18, fhdr, 300, th->text);
+        ui_fill_round_rect(w - 134, 12, 118, 30, 15, th->accent);
+        hal_set_text_bg(th->accent); draw_str(w - 120, 18, "+ 匯入本書單", 104, 0xFFFFFF);
+
+        int grid_y = 58, gap = 16, card_w = (mw - gap * 2) / 3, card_h = (h - grid_y - 34 - gap) / 2;
+        int start_gi = (g_shelf_sel / 6) * 6;
+        for (int slot = 0; slot < 6; slot++) {
             int gi = start_gi + slot; if (gi >= gcnt) break;
-            int row = slot / 4, col = slot % 4, cx = mx + col * (card_w + gap), cy0 = grid_y + row * (card_h + gap);
+            int row = slot / 3, col = slot % 3, cx = mx + col * (card_w + gap), cy0 = grid_y + row * (card_h + gap);
             BookEntry *be = &g_books[gidxs[gi]];
-            ui_card(cx, cy0, card_w, card_h, 12, th->card_bg, th->card_border, th->shadow, (gi == g_shelf_sel), th->accent);
-            int cov_h = card_h - 62; if (cov_h < 54) cov_h = 54;
-            draw_book_cover_smart(cx + 10, cy0 + 8, card_w - 20, cov_h, be, th->is_dark);
-            hal_set_text_bg(th->card_bg); char st[64]; utf8_ellipsis(be->title, (card_w - 20) / 9, st, sizeof(st));
-            draw_str(cx + 10, cy0 + cov_h + 14, st, card_w - 20, th->text);
-            ui_progress_bar(cx + 10, cy0 + card_h - 18, card_w - 20, 5, calc_book_pct(be), th->track, ui_format_color(be->format));
+            ui_card(cx, cy0, card_w, card_h, 14, th->card_bg, th->card_border, th->shadow, (gi == g_shelf_sel), th->accent);
+            int cov_w = 72, cov_h = card_h - 24; if (cov_h > 106) cov_h = 106;
+            draw_book_cover_smart(cx + 12, cy0 + 12, cov_w, cov_h, be, th->is_dark);
+            int tx = cx + cov_w + 22, tw = card_w - cov_w - 30;
+            hal_set_text_bg(th->card_bg); char st[64]; utf8_ellipsis(be->title, tw / 9, st, sizeof(st));
+            draw_str(tx, cy0 + 14, st, tw, th->text);
+            ui_draw_star_row(tx, cy0 + 42, be->rating, 5, 13, 0xF59E0B, th->track);
+            char meta[32]; snprintf(meta, sizeof(meta), "%s · %d%%", STATUS_NM[be->read_status & 3], calc_book_pct(be));
+            draw_str(tx, cy0 + 62, meta, tw, th->muted);
+            ui_progress_bar(tx, cy0 + card_h - 22, tw, 5, calc_book_pct(be), th->track, ui_format_color(be->format));
         }
-        hal_set_text_bg(th->bg); draw_str(mx, h - 22, "[Enter]閱讀 [S]換封面/狀態 [M]移出 [D]刪除 [ESC]返回", mw, th->muted);
+        hal_set_text_bg(th->bg); draw_str(mx, h - 22, "[Enter]閱讀  [S]書籍詳情與星星  [M]移出  [D]刪除  [ESC]返回", mw, th->muted);
         return;
     }
 
+    /* B. 極簡現代頂部列 (不擁擠，把10顆篩選膠囊收進 [篩選] 彈窗!) */
     hal_set_text_bg(th->bg); char hdr[128];
     snprintf(hdr, sizeof(hdr), "Lv.%d %s · 今日%lu/%d分", lv, rpg_level_title(lv), (unsigned long)(today_s / 60u), current_goal_mins());
-    draw_str(mx, 14, hdr, 326, th->text);
-    ui_fill_round_rect(w - 366, 10, 86, 28, 14, th->card_bg); ui_draw_round_rect(w - 366, 10, 86, 28, 14, th->card_border);
-    hal_set_text_bg(th->card_bg); draw_str(w - 354, 15, "日總結[I]", 70, th->text);
-    ui_fill_round_rect(w - 270, 10, 100, 28, 14, th->card_bg); ui_draw_round_rect(w - 270, 10, 100, 28, 14, th->accent);
-    draw_str(w - 258, 15, "+ 資料夾", 84, th->accent);
-    ui_fill_round_rect(w - 160, 10, 144, 28, 14, th->accent);
-    hal_set_text_bg(th->accent); draw_str(w - 144, 15, "+ 匯入新書 [O]", 122, 0xFFFFFF);
+    draw_str(mx, 16, hdr, 300, th->text);
 
-    const char *fp[5] = { "全部", "EPUB", "PDF", "TXT", "圖片" };
-    for (int i = 0; i < 5; i++) {
-        int px = mx + i * 62; uint32_t bg = (g_filter_fmt == i) ? th->accent : th->card_bg;
-        ui_fill_round_rect(px, 46, 56, 24, 8, bg); if (g_filter_fmt != i) ui_draw_round_rect(px, 46, 56, 24, 8, th->card_border);
-        hal_set_text_bg(bg); draw_str(px + 9, 50, fp[i], 44, (g_filter_fmt == i) ? 0xFFFFFF : th->muted);
-    }
-    const char *sp[5] = { "全狀態", "想看", "在讀", "完食", "暫擱" };
-    for (int i = 0; i < 5; i++) {
-        int px = mx + 324 + i * 62; uint32_t bg = (g_filter_status == i) ? 0x10B981 : th->card_bg;
-        ui_fill_round_rect(px, 46, 56, 24, 8, bg); if (g_filter_status != i) ui_draw_round_rect(px, 46, 56, 24, 8, th->card_border);
-        hal_set_text_bg(bg); draw_str(px + 6, 50, sp[i], 48, (g_filter_status == i) ? 0xFFFFFF : th->muted);
-    }
+    int has_filter = (g_filter_fmt != 0 || g_filter_status != 0);
+    uint32_t fbg = has_filter ? 0x10B981 : th->card_bg;
+    ui_fill_round_rect(w - 392, 12, 72, 28, 14, fbg);
+    if (!has_filter) ui_draw_round_rect(w - 392, 12, 72, 28, 14, th->card_border);
+    hal_set_text_bg(fbg); draw_str(w - 378, 17, has_filter ? "已篩選" : "篩選", 52, has_filter ? 0xFFFFFF : th->text);
 
-    int has_hero = (g_filter_fmt == 0 && g_filter_status == 0 && g_book_count > 0) ? 1 : 0;
+    ui_fill_round_rect(w - 312, 12, 76, 28, 14, th->card_bg); ui_draw_round_rect(w - 312, 12, 76, 28, 14, th->card_border);
+    hal_set_text_bg(th->card_bg); draw_str(w - 300, 17, "日總結", 56, th->text);
+
+    ui_fill_round_rect(w - 228, 12, 86, 28, 14, th->card_bg); ui_draw_round_rect(w - 228, 12, 86, 28, 14, th->accent);
+    draw_str(w - 216, 17, "+ 資料夾", 68, th->accent);
+
+    ui_fill_round_rect(w - 134, 12, 118, 28, 14, th->accent);
+    hal_set_text_bg(th->accent); draw_str(w - 118, 17, "+ 匯入新書", 96, 0xFFFFFF);
+
+    int has_hero = (!has_filter && g_book_count > 0) ? 1 : 0;
     if (g_book_count == 0 && g_folder_count == 0) {
-        int cw = mw - 20, ch = h - 122, cx = mx + 10, cy0 = 84;
+        int cw = mw - 12, ch = h - 100, cx = mx + 6, cy0 = 60;
         ui_card(cx, cy0, cw, ch, 16, th->card_bg, th->card_border, th->shadow, 0, th->accent);
-        ui_icon_open_book(cx + cw / 2, cy0 + 72, th->accent, th->bg, th->card_border);
+        ui_icon_open_book(cx + cw / 2, cy0 + 78, th->accent, th->bg, th->card_border);
         hal_set_text_bg(th->card_bg);
-        draw_str(cx + cw / 2 - 175, cy0 + 124, "CD-952 終極全能閱讀器 v8 — 24款封面/60獎盃/每日總結", 420, th->text);
-        draw_str(cx + cw / 2 - 190, cy0 + 154, "支援真PDF/EPUB插圖/TXT修字器/自動翻頁/7天&12月圖表", 420, th->muted);
-        int bw = 240, bh = 40, bx = cx + (cw - bw) / 2, by = cy0 + 206;
-        ui_fill_round_rect(bx, by, bw, bh, 20, th->accent); hal_set_text_bg(th->accent);
-        draw_str(bx + 26, by + 11, "點擊或按 [Enter] 匯入新書", 200, 0xFFFFFF); return;
+        draw_str(cx + cw / 2 - 148, cy0 + 132, "歡迎來到 CD-952 現代化個人書房 v9", 360, th->text);
+        draw_str(cx + 48, cy0 + 166, almanac_daily_quote(snap.cur_year, snap.cur_month, snap.cur_day), cw - 96, th->accent);
+        int bw = 240, bh = 42, bx = cx + (cw - bw) / 2, by = cy0 + 224;
+        ui_fill_round_rect(bx, by, bw, bh, 21, th->accent); hal_set_text_bg(th->accent);
+        draw_str(bx + 26, by + 12, "點擊或按 [Enter] 匯入新書", 200, 0xFFFFFF);
+        return;
     }
 
+    /* C. 寬敞現代「繼續閱讀」Hero 大卡片 (帶金色星星 + 詳情按鈕) */
     if (has_hero) {
-        BookEntry *hero = &g_books[0]; int hy = 80, hh = 104;
-        ui_card(mx, hy, mw, hh, 14, th->card_bg, th->card_border, th->shadow, (g_shelf_sel == 0), th->accent);
-        draw_book_cover_smart(mx + 12, hy + 10, 66, 84, hero, th->is_dark);
-        int tx = mx + 92, tw = mw - 226; hal_set_text_bg(th->card_bg);
-        char ht[96]; utf8_ellipsis(hero->title, tw / 9, ht, sizeof(ht)); draw_str(tx, hy + 12, ht, tw, th->text);
-        char sub[128], bdur[32]; format_duration_zh(hero->read_secs, bdur, sizeof(bdur));
-        snprintf(sub, sizeof(sub), "[%s] · %s · 已讀%s · %d星", STATUS_NM[hero->read_status & 3], book_format_tag(hero->format), bdur, hero->rating);
-        draw_str(tx, hy + 38, sub, tw, th->muted);
-        int hpct = calc_book_pct(hero); ui_progress_bar(tx, hy + 66, tw - 10, 7, hpct, th->track, th->accent);
+        BookEntry *hero = &g_books[0]; int hy = 56, hh = 114;
+        ui_card(mx, hy, mw, hh, 16, th->card_bg, th->card_border, th->shadow, (g_shelf_sel == 0), th->accent);
+        draw_book_cover_smart(mx + 14, hy + 11, 72, 92, hero, th->is_dark);
+
+        int tx = mx + 102, tw = mw - 244; hal_set_text_bg(th->card_bg);
+        char ht[96]; utf8_ellipsis(hero->title, tw / 9, ht, sizeof(ht));
+        draw_str(tx, hy + 14, ht, tw, th->text);
+
+        /* 金色立體像素星星 + 閱讀狀態 */
+        ui_draw_star_row(tx, hy + 42, hero->rating, 5, 14, 0xF59E0B, th->track);
+        char sub[96], bdur[24]; format_duration_zh(hero->read_secs, bdur, sizeof(bdur));
+        snprintf(sub, sizeof(sub), "%s · 已讀%s", STATUS_NM[hero->read_status & 3], bdur);
+        draw_str(tx + 80, hy + 38, sub, tw - 80, th->muted);
+
+        int hpct = calc_book_pct(hero);
+        ui_progress_bar(tx, hy + 68, tw - 10, 7, hpct, th->track, th->accent);
         char pinfo[80];
-        if (hero->page_count > 0) snprintf(pinfo, sizeof(pinfo), "進度 %d%% (第%d/%d頁)", hpct, hero->page_idx + 1, hero->page_count);
-        else snprintf(pinfo, sizeof(pinfo), "圖片書模式 / 點擊開啟");
-        draw_str(tx, hy + 78, pinfo, tw, th->muted);
-        int cta_x = mx + mw - 122, cta_y = hy + 34; uint32_t cbg = (g_shelf_sel == 0) ? th->accent : th->track;
-        ui_fill_round_rect(cta_x, cta_y, 108, 36, 18, cbg); hal_set_text_bg(cbg);
-        draw_str(cta_x + 18, cta_y + 9, "繼續閱讀", 76, (g_shelf_sel == 0) ? 0xFFFFFF : th->text);
+        if (hero->page_count > 0) snprintf(pinfo, sizeof(pinfo), "閱讀進度 %d%% · 第 %d / %d 頁", hpct, hero->page_idx + 1, hero->page_count);
+        else snprintf(pinfo, sizeof(pinfo), "圖片書模式 · 點擊開始翻閱");
+        draw_str(tx, hy + 84, pinfo, tw, th->muted);
+
+        int cta_x = mx + mw - 126;
+        uint32_t cbg = (g_shelf_sel == 0) ? th->accent : ui_blend_color(th->card_bg, th->accent, 85);
+        ui_fill_round_rect(cta_x, hy + 18, 110, 36, 18, cbg); hal_set_text_bg(cbg);
+        draw_str(cta_x + 19, hy + 27, "繼續閱讀", 76, 0xFFFFFF);
+
+        ui_fill_round_rect(cta_x, hy + 64, 110, 32, 16, th->bg); ui_draw_round_rect(cta_x, hy + 64, 110, 32, 16, th->card_border);
+        hal_set_text_bg(th->bg); draw_str(cta_x + 22, hy + 71, "書籍詳情", 76, th->text);
     }
 
-    int grid_y = has_hero ? 210 : 84;
-    if (has_hero) { hal_set_text_bg(th->bg); draw_str(mx, 190, g_toast_msg[0] ? g_toast_msg : "資料夾與藏書 ([S]換24款封面/狀態 · [M]移資料夾)", mw, g_toast_msg[0] ? th->accent : th->muted); }
-    int gap = 12, card_w = (mw - gap * 3) / 4, rows_show = has_hero ? 1 : 2;
-    int card_h = has_hero ? (h - grid_y - 30) : ((h - grid_y - 32 - gap) / 2); if (card_h > 236) card_h = 236;
-    int grid_sel = (g_shelf_sel >= has_hero) ? (g_shelf_sel - has_hero) : 0, per_pg = rows_show * 4, start_gi = (grid_sel / per_pg) * per_pg;
+    /* D. 寬鬆 3 欄大卡片網格 (大幅增加留白、更大封面、每本書皆顯示金色星星!) */
+    int grid_y = has_hero ? 204 : 60;
+    if (has_hero) {
+        hal_set_text_bg(th->bg);
+        draw_str(mx, 180, g_toast_msg[0] ? g_toast_msg : "我的藏書與資料夾 (點書閱讀 · 按 [S] 或點右下開詳情頁)", mw, g_toast_msg[0] ? th->accent : th->muted);
+    }
+
+    int gap = 16, card_w = (mw - gap * 2) / 3, rows_show = has_hero ? 1 : 2;
+    int card_h = has_hero ? (h - grid_y - 30) : ((h - grid_y - 34 - gap) / 2);
+    if (card_h > 240) card_h = 240;
+    int grid_sel = (g_shelf_sel >= has_hero) ? (g_shelf_sel - has_hero) : 0;
+    int per_pg = rows_show * 3, start_gi = (grid_sel / per_pg) * per_pg;
 
     for (int slot = 0; slot < per_pg; slot++) {
         int gi = start_gi + slot; if (gi >= gcnt) break;
-        int row = slot / 4, col = slot % 4, cx = mx + col * (card_w + gap), cy0 = grid_y + row * (card_h + gap);
-        ui_card(cx, cy0, card_w, card_h, 12, th->card_bg, th->card_border, th->shadow, (g_shelf_sel == gi + has_hero), th->accent);
-        int cov_h = card_h - 68; if (cov_h < 54) cov_h = 54;
+        int row = slot / 3, col = slot % 3;
+        int cx = mx + col * (card_w + gap), cy0 = grid_y + row * (card_h + gap);
+        ui_card(cx, cy0, card_w, card_h, 14, th->card_bg, th->card_border, th->shadow, (g_shelf_sel == gi + has_hero), th->accent);
+
         if (gtypes[gi] == 1) {
+            int cov_h = card_h - 68; if (cov_h < 68) cov_h = 68;
             const char *fn = g_folders[gidxs[gi]]; int fcnt = folder_count_books(fn), ff = folder_first_book_idx(fn), tw = 0, thh = 0;
             const uint8_t *trgb = (ff >= 0 && g_books[ff].format == BOOK_FMT_EPUB) ? get_cached_cover(g_books[ff].path, &tw, &thh) : NULL;
-            ui_draw_folder_card(cx + 10, cy0 + 8, card_w - 20, cov_h, trgb, tw, thh, fcnt, th->accent, th->is_dark);
-            hal_set_text_bg(th->card_bg); char fs[64]; utf8_ellipsis(fn, (card_w - 20) / 9, fs, sizeof(fs));
-            draw_str(cx + 10, cy0 + cov_h + 14, fs, card_w - 20, th->text);
-            char fsub[32]; snprintf(fsub, sizeof(fsub), "資料夾 · %d本", fcnt); draw_str(cx + 10, cy0 + card_h - 24, fsub, card_w - 20, th->muted);
+            ui_draw_folder_card(cx + 14, cy0 + 12, card_w - 28, cov_h, trgb, tw, thh, fcnt, th->accent, th->is_dark);
+            hal_set_text_bg(th->card_bg); char fs[64]; utf8_ellipsis(fn, (card_w - 28) / 9, fs, sizeof(fs));
+            draw_str(cx + 14, cy0 + cov_h + 20, fs, card_w - 28, th->text);
+            char fsub[32]; snprintf(fsub, sizeof(fsub), "資料夾 · %d 本書", fcnt);
+            draw_str(cx + 14, cy0 + card_h - 24, fsub, card_w - 28, th->muted);
         } else {
-            BookEntry *be = &g_books[gidxs[gi]]; draw_book_cover_smart(cx + 10, cy0 + 8, card_w - 20, cov_h, be, th->is_dark);
-            hal_set_text_bg(th->card_bg); char st[64]; utf8_ellipsis(be->title, (card_w - 20) / 9, st, sizeof(st));
-            draw_str(cx + 10, cy0 + cov_h + 14, st, card_w - 20, th->text);
-            ui_progress_bar(cx + 10, cy0 + card_h - 28, card_w - 20, 5, calc_book_pct(be), th->track, ui_format_color(be->format));
-            char meta[32]; snprintf(meta, sizeof(meta), "%s %d%%", STATUS_NM[be->read_status & 3], calc_book_pct(be));
-            draw_str(cx + 10, cy0 + card_h - 20, meta, card_w - 20, th->muted);
+            BookEntry *be = &g_books[gidxs[gi]];
+            if (has_hero) {
+                /* 單排大卡片：上方大精裝封面 + 下方書名 + 金色星星 + 進度條 + 詳情膠囊 */
+                int cov_h = card_h - 86; if (cov_h < 90) cov_h = 90;
+                draw_book_cover_smart(cx + 18, cy0 + 12, card_w - 36, cov_h, be, th->is_dark);
+                hal_set_text_bg(th->card_bg); char st[64]; utf8_ellipsis(be->title, (card_w - 28) / 9, st, sizeof(st));
+                draw_str(cx + 14, cy0 + cov_h + 18, st, card_w - 28, th->text);
+                ui_draw_star_row(cx + 14, cy0 + cov_h + 44, be->rating, 5, 13, 0xF59E0B, th->track);
+                ui_fill_round_rect(cx + card_w - 58, cy0 + cov_h + 40, 46, 20, 7, th->bg);
+                ui_draw_round_rect(cx + card_w - 58, cy0 + cov_h + 40, 46, 20, 7, th->card_border);
+                hal_set_text_bg(th->bg); draw_str(cx + card_w - 50, cy0 + cov_h + 41, "詳情", 36, th->muted);
+                ui_progress_bar(cx + 14, cy0 + card_h - 14, card_w - 28, 5, calc_book_pct(be), th->track, ui_format_color(be->format));
+            } else {
+                /* 篩選模式下 3x2 橫式大卡片 */
+                int cov_w = 72, cov_h = card_h - 24; if (cov_h > 106) cov_h = 106;
+                draw_book_cover_smart(cx + 12, cy0 + 12, cov_w, cov_h, be, th->is_dark);
+                int tx = cx + cov_w + 22, tw = card_w - cov_w - 30;
+                hal_set_text_bg(th->card_bg); char st[64]; utf8_ellipsis(be->title, tw / 9, st, sizeof(st));
+                draw_str(tx, cy0 + 14, st, tw, th->text);
+                ui_draw_star_row(tx, cy0 + 42, be->rating, 5, 13, 0xF59E0B, th->track);
+                char meta[32]; snprintf(meta, sizeof(meta), "%s · %d%%", STATUS_NM[be->read_status & 3], calc_book_pct(be));
+                draw_str(tx, cy0 + 62, meta, tw, th->muted);
+                ui_progress_bar(tx, cy0 + card_h - 22, tw, 5, calc_book_pct(be), th->track, ui_format_color(be->format));
+            }
         }
     }
-    hal_set_text_bg(th->bg); draw_str(mx, h - 22, "[1]書架 [2]管理 [3]統計 [4]成就 [5]外觀 [6/O]匯入 [I]日總結", mw, th->muted);
+    hal_set_text_bg(th->bg); draw_str(mx, h - 22, "[1]書架 [2]管理 [3]統計/雷達 [4]成就 [5]外觀 [6/O]匯入 [S]詳情", mw, th->muted);
 }
 
 static void render_home_manage(const AppTheme *th, int w, int h) {
@@ -1676,9 +1784,10 @@ static void render_home_manage(const AppTheme *th, int w, int h) {
         hal_set_text_bg(th->card_bg); char tbuf[80]; utf8_ellipsis(be->title, (mw - 250) / 9, tbuf, sizeof(tbuf));
         draw_str(mx + 64, ry + 8, tbuf, mw - 250, th->text);
         char sub[140], dstr[24]; format_duration_zh(be->read_secs, dstr, sizeof(dstr));
-        snprintf(sub, sizeof(sub), "[%s] %d★ · 封面#%02d · 已讀%s", STATUS_NM[be->read_status & 3], be->rating, be->cover_style, dstr);
-        draw_str(mx + 12, ry + 34, sub, mw - 190, th->muted);
-        ui_fill_round_rect(mx + mw - 166, ry + 14, 56, 30, 8, 0x059669); hal_set_text_bg(0x059669); draw_str(mx + mw - 158, ry + 20, "封/狀", 46, 0xFFFFFF);
+        ui_draw_star_row(mx + 12, ry + 36, be->rating, 5, 12, 0xF59E0B, th->track);
+        snprintf(sub, sizeof(sub), "[%s] · 封面#%02d · 已讀%s", STATUS_NM[be->read_status & 3], be->cover_style, dstr);
+        draw_str(mx + 82, ry + 34, sub, mw - 260, th->muted);
+        ui_fill_round_rect(mx + mw - 166, ry + 14, 56, 30, 8, 0x059669); hal_set_text_bg(0x059669); draw_str(mx + mw - 156, ry + 20, "詳情", 42, 0xFFFFFF);
         ui_fill_round_rect(mx + mw - 104, ry + 14, 44, 30, 8, th->accent); hal_set_text_bg(th->accent); draw_str(mx + mw - 92, ry + 20, "移", 24, 0xFFFFFF);
         ui_fill_round_rect(mx + mw - 54, ry + 14, 44, 30, 8, 0xEF4444); hal_set_text_bg(0xEF4444); draw_str(mx + mw - 42, ry + 20, "刪", 24, 0xFFFFFF);
     }
@@ -1726,17 +1835,16 @@ static void render_daily_report_body(const AppTheme *th, int x, int y, int w, in
 
 static void render_home_stats(const AppTheme *th, int w, int h) {
     int mx = 94, mw = w - mx - 18;
-    const char *stabs[4] = { "365熱力", "7天柱狀", "12月趨勢", "每日總結" };
-    for (int i = 0; i < 4; i++) {
-        int tx = mx + i * 110; uint32_t bg = (g_stats_subtab == i) ? th->accent : th->card_bg;
-        ui_fill_round_rect(tx, 10, 104, 30, 8, bg); if (g_stats_subtab != i) ui_draw_round_rect(tx, 10, 104, 30, 8, th->card_border);
-        hal_set_text_bg(bg); draw_str(tx + 14, 16, stabs[i], 84, (g_stats_subtab == i) ? 0xFFFFFF : th->text);
+    const char *stabs[5] = { "365熱力", "7天柱狀", "12月趨勢", "五維雷達", "每日總結" };
+    for (int i = 0; i < 5; i++) {
+        int tx = mx + i * 98; uint32_t bg = (g_stats_subtab == i) ? th->accent : th->card_bg;
+        ui_fill_round_rect(tx, 10, 92, 30, 8, bg); if (g_stats_subtab != i) ui_draw_round_rect(tx, 10, 92, 30, 8, th->card_border);
+        hal_set_text_bg(bg); draw_str(tx + 10, 16, stabs[i], 76, (g_stats_subtab == i) ? 0xFFFFFF : th->text);
     }
-    ui_fill_round_rect(w - 162, 10, 70, 30, 8, th->card_bg); ui_draw_round_rect(w - 162, 10, 70, 30, 8, th->card_border);
-    hal_set_text_bg(th->card_bg); draw_str(w - 152, 16, g_stats_subtab == 3 ? "<前日" : "<去年", 56, th->text);
-    ui_fill_round_rect(w - 86, 10, 70, 30, 8, th->card_bg); ui_draw_round_rect(w - 86, 10, 70, 30, 8, th->card_border);
-    draw_str(w - 76, 16, g_stats_subtab == 3 ? "後日>" : "明年>", 56, th->text);
-
+    ui_fill_round_rect(w - 148, 10, 64, 30, 8, th->card_bg); ui_draw_round_rect(w - 148, 10, 64, 30, 8, th->card_border);
+    hal_set_text_bg(th->card_bg); draw_str(w - 140, 16, g_stats_subtab == 4 ? "<前日" : "<去年", 52, th->text);
+    ui_fill_round_rect(w - 80, 10, 64, 30, 8, th->card_bg); ui_draw_round_rect(w - 80, 10, 64, 30, 8, th->card_border);
+    draw_str(w - 72, 16, g_stats_subtab == 4 ? "後日>" : "明年>", 52, th->text);
     int cy, cm, cd, hh, mm, ss; hal_get_local_time(&cy, &cm, &cd, &hh, &mm, &ss);
     if (g_stats_subtab == 0) {
         uint32_t ts = 0, tp = 0; stats_get_day(cy, cm, cd, &ts, &tp);
@@ -1812,6 +1920,56 @@ static void render_home_stats(const AppTheme *th, int w, int h) {
             hal_fill_circle(cx, cy_pt, 4, 0xF59E0B); prev_cx = cx; prev_cy = cy_pt;
             char ml[8]; snprintf(ml, sizeof(ml), "%dM", i + 1); ui_draw_ascii(cx - ui_ascii_width(ml, 1) / 2, base_y + 10, ml, 1, th->muted);
             if (mins > 0) { char mv[12]; snprintf(mv, sizeof(mv), "%d", mins); ui_draw_ascii(cx - ui_ascii_width(mv, 1) / 2, cy_pt - 14, mv, 1, th->text); }
+        }
+    } else if (g_stats_subtab == 3) {
+        /* 五維閱讀能力雷達圖 (專注時長 / 翻頁速度 / 打卡毅力 / 藏書廣度 / 完食率) */
+        RpgSnapshot snap; build_rpg_snapshot(&snap);
+        int s[5];
+        int mins = (int)(snap.lifetime_secs / 60u);
+        s[0] = (mins * 100) / 300; if (snap.lifetime_secs > 0 && s[0] < 15) s[0] = 15; if (s[0] > 100) s[0] = 100;
+        s[1] = (int)((snap.lifetime_pages * 100u) / 500u); if (snap.lifetime_pages > 0 && s[1] < 15) s[1] = 15; if (s[1] > 100) s[1] = 100;
+        s[2] = snap.streak * 12 + snap.lifetime_days * 4; if (snap.lifetime_days > 0 && s[2] < 15) s[2] = 15; if (s[2] > 100) s[2] = 100;
+        int fmts = (snap.epub_count > 0) + (snap.pdf_count > 0) + (snap.txt_count > 0) + (snap.img_count > 0);
+        s[3] = snap.book_count * 7 + fmts * 12; if (snap.book_count > 0 && s[3] < 18) s[3] = 18; if (s[3] > 100) s[3] = 100;
+        s[4] = (snap.book_count > 0 ? (snap.finished_books * 85) / snap.book_count : 0) + rpg_count_unlocked() * 2;
+        if (s[4] > 100) s[4] = 100;
+        if (s[4] < 12 && (snap.book_count > 0 || rpg_count_unlocked() > 0)) s[4] = 12;
+
+        int avg = (s[0] + s[1] + s[2] + s[3] + s[4]) / 5;
+        const char *rank = (avg >= 85) ? "S+" : (avg >= 70 ? "S" : (avg >= 50 ? "A" : (avg >= 30 ? "B" : "C")));
+        uint32_t rcol = (avg >= 70) ? 0xF59E0B : (avg >= 50 ? 0x10B981 : th->accent);
+
+        ui_card(mx, 52, mw, h - 84, 16, th->card_bg, th->card_border, th->shadow, 0, th->accent);
+
+        /* 左半部：五邊形雷達圖 + 5 軸標籤 */
+        int rcx = mx + 178, rcy = 246, rad = 102;
+        ui_draw_radar_5(rcx, rcy, rad, s, th->card_border, th->accent, th->accent, th->card_bg);
+
+        hal_set_text_bg(th->card_bg);
+        draw_str(rcx - 32, rcy - rad - 24, "專注時長", 76, th->text);
+        draw_str(rcx + rad - 10, rcy - 42, "翻頁速度", 76, th->text);
+        draw_str(rcx + 36, rcy + rad - 10, "打卡毅力", 76, th->text);
+        draw_str(rcx - 106, rcy + rad - 10, "藏書廣度", 76, th->text);
+        draw_str(rcx - rad - 68, rcy - 42, "完食成就", 76, th->text);
+
+        /* 右半部：閱讀人格稱號 + 綜合評級 + 五維進度條 */
+        int rx = mx + 364, rw = mw - 380;
+        ui_fill_round_rect(rx, 68, rw, 78, 12, th->bg);
+        ui_fill_round_rect(rx + 12, 80, 54, 54, 12, rcol);
+        ui_draw_ascii(rx + 12 + (54 - ui_ascii_width(rank, 2)) / 2, 100, rank, 2, 0xFFFFFF);
+        hal_set_text_bg(th->bg);
+        draw_str(rx + 78, 82, almanac_radar_archetype(s), rw - 88, th->text);
+        char csc[48]; snprintf(csc, sizeof(csc), "五維綜合戰力：%d / 100", avg);
+        draw_str(rx + 78, 110, csc, rw - 88, th->accent);
+
+        const char *dims[5] = { "1. 專注時長", "2. 翻頁速度", "3. 打卡毅力", "4. 藏書廣度", "5. 完食成就" };
+        uint32_t dcols[5] = { 0x3B82F6, 0x10B981, 0xF59E0B, 0x8B5CF6, 0xEC4899 };
+        hal_set_text_bg(th->card_bg);
+        for (int i = 0; i < 5; i++) {
+            int dy = 164 + i * 48;
+            char dl[48]; snprintf(dl, sizeof(dl), "%s  (%d分)", dims[i], s[i]);
+            draw_str(rx, dy, dl, rw, th->text);
+            ui_progress_bar(rx, dy + 24, rw - 8, 9, s[i], th->track, dcols[i]);
         }
     } else {
         ui_card(mx, 52, mw, h - 84, 14, th->card_bg, th->card_border, th->shadow, 0, th->accent);
@@ -2056,33 +2214,125 @@ static void render_read_menu_overlay(const AppTheme *th, int w, int h) {
     }
 }
 
-static void render_book_style_overlay(const AppTheme *th, int w, int h) {
+static void render_filter_overlay(const AppTheme *th, int w, int h) {
+    int mw = 480, mh = 270, mx = (w - mw) / 2, my = (h - mh) / 2;
+    begin_modal(w, h, mx, my, mw, mh);
+    ui_card(mx, my, mw, mh, 16, th->card_bg, th->card_border, th->shadow, 1, th->accent);
+    ui_fill_round_rect(mx + 2, my + 2, mw - 4, 42, 14, th->bar_bg);
+    hal_set_text_bg(th->bar_bg); draw_str(mx + 20, my + 12, "書架篩選器 (點擊過濾 · 保持書架清爽)", mw - 40, th->text);
+
+    hal_set_text_bg(th->card_bg); draw_str(mx + 20, my + 54, "按檔案格式：", 200, th->muted);
+    const char *fp[5] = { "全部", "EPUB", "PDF", "TXT", "圖片" };
+    for (int i = 0; i < 5; i++) {
+        int px = mx + 20 + i * 88; uint32_t bg = (g_filter_fmt == i) ? th->accent : th->bg;
+        ui_fill_round_rect(px, my + 80, 80, 34, 9, bg);
+        if (g_filter_fmt != i) ui_draw_round_rect(px, my + 80, 80, 34, 9, th->card_border);
+        hal_set_text_bg(bg); draw_str(px + 20, my + 88, fp[i], 50, (g_filter_fmt == i) ? 0xFFFFFF : th->text);
+    }
+
+    hal_set_text_bg(th->card_bg); draw_str(mx + 20, my + 128, "按閱讀狀態：", 200, th->muted);
+    const char *sp[5] = { "全狀態", "想看", "閱讀中", "已完食", "暫擱" };
+    for (int i = 0; i < 5; i++) {
+        int px = mx + 20 + i * 88; uint32_t bg = (g_filter_status == i) ? 0x10B981 : th->bg;
+        ui_fill_round_rect(px, my + 154, 80, 34, 9, bg);
+        if (g_filter_status != i) ui_draw_round_rect(px, my + 154, 80, 34, 9, th->card_border);
+        hal_set_text_bg(bg); draw_str(px + 14, my + 162, sp[i], 60, (g_filter_status == i) ? 0xFFFFFF : th->text);
+    }
+
+    ui_fill_round_rect(mx + 20, my + 214, 212, 38, 10, th->bg); ui_draw_round_rect(mx + 20, my + 214, 212, 38, 10, th->card_border);
+    hal_set_text_bg(th->bg); draw_str(mx + 82, my + 224, "重設全部", 100, th->text);
+    ui_fill_round_rect(mx + 248, my + 214, 212, 38, 10, th->accent);
+    hal_set_text_bg(th->accent); draw_str(mx + 312, my + 224, "套用篩選", 100, 0xFFFFFF);
+}
+
+/* 全螢幕現代「獨立書籍詳情頁」 (24款封面切換 / 5星評分 / 4狀態 / 里程碑 / 快捷操作) */
+static void render_book_detail_page(const AppTheme *th, int w, int h) {
+    (void)h;
     if (g_style_book_idx < 0 || g_style_book_idx >= g_book_count) return;
-    BookEntry *be = &g_books[g_style_book_idx]; int mw = 560, mh = 370, mx = (w - mw) / 2, my = (h - mh) / 2;
-    begin_modal(w, h, mx, my, mw, mh); ui_card(mx, my, mw, mh, 14, th->card_bg, th->card_border, th->shadow, 1, th->accent);
-    ui_fill_round_rect(mx + 2, my + 2, mw - 4, 42, 12, th->bar_bg); hal_set_text_bg(th->bar_bg);
-    char hdr[96], ts[40]; utf8_ellipsis(be->title, 22, ts, sizeof(ts)); snprintf(hdr, sizeof(hdr), "封面與閱讀狀態：%s", ts);
-    draw_str(mx + 18, my + 12, hdr, mw - 36, th->text);
-    draw_book_cover_smart(mx + 22, my + 62, 126, 176, be, th->is_dark);
+    BookEntry *be = &g_books[g_style_book_idx];
+    hal_clear(th->bg);
+
+    /* 頂部極簡導覽列 */
+    hal_fill_rect(0, 0, w, 46, th->bar_bg); hal_fill_rect(0, 46, w, 1, th->card_border);
+    ui_fill_round_rect(16, 9, 96, 28, 10, th->card_bg); ui_draw_round_rect(16, 9, 96, 28, 10, th->card_border);
+    hal_set_text_bg(th->card_bg); draw_str(26, 14, "< 返回書架", 80, th->text);
+
+    ui_draw_badge(126, 16, book_format_tag(be->format), ui_format_color(be->format), 0xFFFFFF);
+    hal_set_text_bg(th->bar_bg); char thdr[96]; utf8_ellipsis(be->title, 34, thdr, sizeof(thdr));
+    draw_str(182, 14, thdr, w - 200, th->text);
+
+    /* 左欄：大尺寸精裝書封預覽 + 24 款模板切換器 */
+    ui_card(20, 62, 204, 392, 16, th->card_bg, th->card_border, th->shadow, 0, th->accent);
+    draw_book_cover_smart(44, 78, 156, 216, be, th->is_dark);
+
+    ui_fill_round_rect(32, 316, 86, 36, 9, th->bg); ui_draw_round_rect(32, 316, 86, 36, 9, th->card_border);
+    hal_set_text_bg(th->bg); draw_str(44, 325, "< 上款", 64, th->text);
+
+    ui_fill_round_rect(126, 316, 86, 36, 9, th->accent);
+    hal_set_text_bg(th->accent); draw_str(140, 325, "下款 >", 64, 0xFFFFFF);
+
     hal_set_text_bg(th->card_bg);
-    draw_str(mx + 170, my + 62, "1. 套用精裝繪製封面 (共 24 款模板)：", 360, g_style_row == 0 ? th->accent : th->muted);
-    draw_str(mx + 170, my + 88, cover_style_name(be->cover_style), 360, th->text);
-    ui_fill_round_rect(mx + 170, my + 116, 176, 36, 8, th->bar_bg); ui_draw_round_rect(mx + 170, my + 116, 176, 36, 8, th->card_border);
-    hal_set_text_bg(th->bar_bg); draw_str(mx + 210, my + 125, "< 上一款模板", 120, th->text);
-    ui_fill_round_rect(mx + 358, my + 116, 176, 36, 8, th->accent); hal_set_text_bg(th->accent); draw_str(mx + 398, my + 125, "下一款模板 >", 120, 0xFFFFFF);
-    hal_set_text_bg(th->card_bg); draw_str(mx + 170, my + 166, "2. 閱讀狀態標籤：", 360, g_style_row == 1 ? th->accent : th->muted);
+    char cname[48]; utf8_ellipsis(cover_style_name(be->cover_style), 19, cname, sizeof(cname));
+    draw_str(32, 368, "精裝封面 (24款)：", 180, th->muted);
+    draw_str(32, 394, cname, 180, th->text);
+    draw_str(32, 424, "左右點按即時預覽", 180, th->muted);
+
+    /* 右欄：書本詳情、星星評分、狀態、進度里程碑與大按鈕 */
+    int rx = 242, rw = w - rx - 20;
+    ui_card(rx, 62, rw, 312, 16, th->card_bg, th->card_border, th->shadow, 0, th->accent);
+    hal_set_text_bg(th->card_bg);
+
+    char full_t[96]; utf8_ellipsis(be->title, 30, full_t, sizeof(full_t));
+    draw_str(rx + 20, 74, full_t, rw - 40, th->text);
+
+    /* 互動 5 顆金色星星 */
+    ui_draw_star_row(rx + 20, 114, be->rating, 5, 36, 0xF59E0B, th->track);
+    char rtxt[48]; snprintf(rtxt, sizeof(rtxt), "%d / 5 顆星 (點星星評分)", be->rating);
+    draw_str(rx + 216, 110, rtxt, rw - 230, th->muted);
+
+    /* 閱讀狀態 4 顆現代膠囊 */
+    draw_str(rx + 20, 146, "閱讀狀態：", 120, th->muted);
     for (int s = 0; s < 4; s++) {
-        int sx = mx + 170 + s * 92; uint32_t bg = (be->read_status == s) ? 0x10B981 : th->bar_bg;
-        ui_fill_round_rect(sx, my + 192, 84, 34, 8, bg); if (be->read_status != s) ui_draw_round_rect(sx, my + 192, 84, 34, 8, th->card_border);
-        hal_set_text_bg(bg); draw_str(sx + 16, my + 200, STATUS_NM[s], 60, be->read_status == s ? 0xFFFFFF : th->text);
+        int sx = rx + 20 + s * 118;
+        uint32_t bg = (be->read_status == s) ? 0x10B981 : th->bg;
+        ui_fill_round_rect(sx, 172, 108, 36, 10, bg);
+        if (be->read_status != s) ui_draw_round_rect(sx, 172, 108, 36, 10, th->card_border);
+        hal_set_text_bg(bg); draw_str(sx + 26, 181, STATUS_NM[s], 68, (be->read_status == s) ? 0xFFFFFF : th->text);
     }
-    hal_set_text_bg(th->card_bg); draw_str(mx + 170, my + 236, "3. 星級評分 (點星星設定)：", 360, g_style_row == 2 ? th->accent : th->muted);
-    for (int st = 1; st <= 5; st++) {
-        int sx = mx + 170 + (st - 1) * 48; uint32_t bg = (st <= be->rating) ? 0xF59E0B : th->bar_bg;
-        ui_fill_round_rect(sx, my + 260, 42, 34, 8, bg); char sl[8]; snprintf(sl, sizeof(sl), "%d", st);
-        ui_draw_ascii(sx + 18, my + 272, sl, 1, st <= be->rating ? 0xFFFFFF : th->muted);
+
+    /* 單書閱讀進度與 4 大里程碑印章 (25% / 50% / 75% / 100%) */
+    int pct = calc_book_pct(be);
+    ui_fill_round_rect(rx + 20, 224, rw - 40, 134, 12, th->bg);
+    hal_set_text_bg(th->bg);
+    char dstr[24], s1[128], s2[128]; format_duration_zh(be->read_secs, dstr, sizeof(dstr));
+    snprintf(s1, sizeof(s1), "進度：%d%% (第 %d / %d 頁)  ·  累計閱讀：%s",
+             pct, be->page_idx + 1, be->page_count > 0 ? be->page_count : 1, dstr);
+    snprintf(s2, sizeof(s2), "資料夾：%s  ·  作者：%s",
+             be->folder[0] ? be->folder : "外層主書架", be->author[0] ? be->author : "未標註");
+    draw_str(rx + 34, 236, s1, rw - 68, th->text);
+    draw_str(rx + 34, 264, s2, rw - 68, th->muted);
+    ui_progress_bar(rx + 34, 294, rw - 68, 9, pct, th->track, th->accent);
+
+    const char *mlbl[4] = { "25% 起步", "50% 過半", "75% 衝刺", "100% 完食" };
+    int mvals[4] = { 25, 50, 75, 100 };
+    for (int i = 0; i < 4; i++) {
+        int mx0 = rx + 34 + i * 116;
+        int hit = (pct >= mvals[i] || (i == 3 && be->read_status == 2));
+        uint32_t mbg = hit ? 0xF59E0B : th->card_bg;
+        ui_fill_round_rect(mx0, 316, 106, 28, 8, mbg);
+        if (!hit) ui_draw_round_rect(mx0, 316, 106, 28, 8, th->card_border);
+        hal_set_text_bg(mbg); draw_str(mx0 + 12, 321, mlbl[i], 88, hit ? 0xFFFFFF : th->muted);
     }
-    ui_fill_round_rect(mx + 180, my + mh - 48, 200, 34, 10, th->accent); hal_set_text_bg(th->accent); draw_str(mx + 236, my + mh - 40, "儲存並關閉", 100, 0xFFFFFF);
+
+    /* 底部 3 顆現代大按鈕：[開始 / 繼續閱讀] [移至資料夾] [移出書架] */
+    ui_card(rx, 392, 240, 48, 12, th->accent, th->accent, th->shadow, 1, th->accent);
+    hal_set_text_bg(th->accent); draw_str(rx + 66, 406, pct > 0 ? "繼續閱讀本書" : "開始閱讀本書", 140, 0xFFFFFF);
+
+    ui_card(rx + 252, 392, 134, 48, 12, th->card_bg, th->card_border, th->shadow, 0, th->accent);
+    hal_set_text_bg(th->card_bg); draw_str(rx + 274, 406, "移至資料夾", 100, th->text);
+
+    ui_card(rx + 398, 392, rw - 398, 48, 12, 0xEF4444, 0xEF4444, th->shadow, 0, 0xEF4444);
+    hal_set_text_bg(0xEF4444); draw_str(rx + 422, 406, "移出書架", 96, 0xFFFFFF);
 }
 
 static void render_txt_editor_overlay(const AppTheme *th, int w, int h) {
@@ -2247,8 +2497,9 @@ static void render_next_vol_overlay(const AppTheme *th, int w, int h) {
 
 void reader_render(void) {
     const AppTheme *th = theme_get(g_theme_idx); int w = hal_get_width(), h = hal_get_height();
+    if (g_screen == SCR_BOOK_STYLE) { render_book_detail_page(th, w, h); hal_present(); return; }
     if (g_screen == SCR_HOME || g_screen == SCR_NEW_FOLDER || g_screen == SCR_MOVE_FOLDER ||
-        g_screen == SCR_BOOK_STYLE || (g_screen == SCR_DAILY_REPORT && g_return_screen == SCR_HOME)) {
+        g_screen == SCR_FILTER || (g_screen == SCR_DAILY_REPORT && g_return_screen == SCR_HOME)) {
         hal_clear(th->bg); render_left_rail(th, h);
         if (g_home_tab == TAB_SHELF) render_home_shelf(th, w, h);
         else if (g_home_tab == TAB_MANAGE) render_home_manage(th, w, h);
@@ -2257,7 +2508,7 @@ void reader_render(void) {
         else render_home_appearance(th, w, h);
         if (g_screen == SCR_NEW_FOLDER) render_new_folder_overlay(th, w, h);
         else if (g_screen == SCR_MOVE_FOLDER) render_move_folder_overlay(th, w, h);
-        else if (g_screen == SCR_BOOK_STYLE) render_book_style_overlay(th, w, h);
+        else if (g_screen == SCR_FILTER) render_filter_overlay(th, w, h);
         else if (g_screen == SCR_DAILY_REPORT) render_daily_report_modal(th, w, h);
         hal_present(); return;
     }
